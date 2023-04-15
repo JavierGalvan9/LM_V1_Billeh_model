@@ -1,0 +1,11 @@
+.cache
+Bluebrain project model
+Error
+Out
+GLIF_network
+Simulation_results
+load_sparse_profiling.ipynb
+pruebas.ipynb
+*__pycache__*
+.ipynb_checkpoint*
+Model_utils/.cache
