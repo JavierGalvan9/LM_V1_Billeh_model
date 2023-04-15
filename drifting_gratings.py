@@ -1,9 +1,3 @@
-import other_billeh_utils
-import toolkit
-import models
-import load_sparse
-from plotting_mine import InputActivityFigure, RasterPlot, LaminarPlot, LGN_sample_plot
-import file_management
 import os
 import sys
 import absl
@@ -12,14 +6,14 @@ import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
 from tensorflow.keras.mixed_precision import experimental as mixed_precision
+from Model_utils import load_sparse, models, other_billeh_utils, toolkit
+from Model_utils.plotting_mine import InputActivityFigure, RasterPlot, LaminarPlot, LGN_sample_plot
+from general_utils import file_management
 from time import time
-
-parentDir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.append("general_utils")
-
-sys.path.append(os.path.join(os.getcwd(), "Model_utils"))
 # import callbacks
 # import data_sets
+
+# parentDir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 class PlotCallback(tf.keras.callbacks.Callback):
@@ -156,16 +150,27 @@ def main(_):
     input_weight_scale = 1.
 
     ### LGN INPUT ###
-    lgn_firing_rates_filename = f'orientation_{flags.gratings_orientation}&TF_{flags.gratings_frequency}&SF_0.04&reverse_False&init_screen_dur_0.5&visual_flow_dur_2.0&end_screen_dur_0.0&min_value_-1&max_value_1&contrast_0.8&dt_0.001&height_120&width_240&init_gray_screen_True&end_gray_screen_True.lzma'
-    with open(os.path.join(parentDir, 'Visual_stimulus', 'DriftingGratings', 'LGN_firing_rates', lgn_firing_rates_filename), 'rb') as f:
+    # lgn_firing_rates_filename = f'orientation_{flags.gratings_orientation}&TF_{flags.gratings_frequency}&SF_0.04&reverse_False&init_screen_dur_0.5&visual_flow_dur_2.0&end_screen_dur_0.0&min_value_-1&max_value_1&contrast_0.8&dt_0.001&height_120&width_240&init_gray_screen_True&end_gray_screen_True.lzma'
+    # with open(os.path.join(parentDir, 'Visual_stimulus', 'DriftingGratings', 'LGN_firing_rates', lgn_firing_rates_filename), 'rb') as f:
+    #     firing_rates = file_management.load_lzma(f)
+
+    lgn_firing_rates_filename = f"orientation_{str(flags.gratings_orientation)}&TF_{str(float(flags.gratings_frequency))}&SF_0.04&reverse_False&init_screen_dur_1.0&visual_flow_dur_1.0&end_screen_dur_1.0&min_value_-1&max_value_1&contrast_0.8&dt_0.001&height_120&width_240&init_gray_screen_False&end_gray_screen_False.lzma"
+
+    with open(
+        os.path.join(
+            flags.data_dir, "input", "Drifting_gratings", lgn_firing_rates_filename
+        ),
+        "rb",
+    ) as f:
         firing_rates = file_management.load_lzma(f)
 
     # firing_rates are the probability of spikes/seconds so we convert that to spike/ms
     # then, if random number in 0-1 is lower that firing_rate in spike/ms, there is a
     # neuron spike at that ms
 
-    # firing_rates = firing_rates[None, 500:flags.seq_len+500]  # (1,2500,17400)
-    firing_rates = firing_rates[None, :flags.seq_len]  # (1,2500,17400)
+    # firing_rates = firing_rates[None, :flags.seq_len]  # (1,2500,17400)
+    firing_rates = firing_rates[None,
+                                500: flags.seq_len + 500]  # (1,2500,17400)
 
     # Isolate the core neurons
     V1_core_neurons = 51978
