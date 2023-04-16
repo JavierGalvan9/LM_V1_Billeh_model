@@ -1,5 +1,9 @@
 .cache
-Bluebrain project model
+Bluebrain project model/Source*
+Bluebrain project model/Out
+Bluebrain project model/Error
+Bluebrain project model/Dat*
+Bluebrain project model/various.ipynb
 Error
 Out
 GLIF_network
