@@ -6,20 +6,19 @@ Created on Thu Jan  6 19:43:44 2022
 """
 
 
-# import file_management
 import pandas as pd
 import os
 import sys
 import numpy as np
 import h5py
-from fnmatch import filter
+import time
 from scipy.ndimage import gaussian_filter1d
-parentDir = os.path.dirname(os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__))))
+parentDir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(os.path.join(parentDir, "general_utils"))
+import file_management
 
 
-def pop_names(network, data_dir='GLIF_network'):
+def pop_names(network, core_radius= None, data_dir='GLIF_network'):
     path_to_csv = os.path.join(data_dir, 'network/V1_node_types.csv')
     path_to_h5 = os.path.join(data_dir, 'network/V1_nodes.h5')
     node_types = pd.read_csv(path_to_csv, sep=' ')
@@ -36,6 +35,10 @@ def pop_names(network, data_dir='GLIF_network'):
         true_pop_names.append(node_type_id_to_pop_name[nid])
      # Select population names of neurons in the present network (core)
     true_pop_names = np.array(true_pop_names)[network['tf_id_to_bmtk_id']]
+
+    if core_radius is not None:
+        selected_mask = isolate_core_neurons(network, radius=core_radius, data_dir=data_dir)
+        true_pop_names = true_pop_names[selected_mask]
 
     return true_pop_names
 
@@ -150,3 +153,126 @@ def voltage_spike_effect_correction(v, z, pre_spike_gap=2, post_spike_gap=3):
 #         data = data[key]
 
 #     return data, n_simulations
+
+
+############################ DATA SAVING AND LOADING METHODS #########################
+class SaveSimDataHDF5:
+    def __init__(self, flags, keys, data_path, networks, n_neurons, V1_to_LM_neurons_ratio, save_core_only=True, dtype=np.float16):
+        self.keys = keys
+        self.data_path = data_path
+        os.makedirs(self.data_path, exist_ok=True)
+        self.dtype = dtype
+        self.V1_neurons = n_neurons['V1']
+        self.LM_neurons = n_neurons['LM']
+        V1_core_radius = 400
+        self.V1_core_neurons = 51978
+        self.LM_core_neurons = 7285
+
+        if self.V1_neurons > self.V1_core_neurons and save_core_only:
+            # Isolate the core neurons from V1
+            self.V1_core_mask = isolate_core_neurons(networks['V1'], radius=V1_core_radius, data_dir=flags.data_dir) 
+        else:
+            self.V1_core_neurons = self.V1_neurons
+            self.V1_core_mask = np.full(self.V1_core_neurons, True)
+        
+        if self.LM_neurons > self.LM_core_neurons and save_core_only:
+            # Isolate the core neurons from LM
+            LM_core_radius = V1_core_radius/np.sqrt(V1_to_LM_neurons_ratio)
+            self.LM_core_mask = isolate_core_neurons(networks['LM'], radius=LM_core_radius, data_dir=flags.data_dir)
+        else:
+            self.LM_core_neurons = self.LM_neurons
+            self.LM_core_mask = np.full(self.LM_core_neurons, True)
+
+        # Define the shape of the data matrix
+        self.V1_data_shape = (flags.n_simulations, flags.seq_len, self.V1_neurons)
+        self.V1_core_data_shape = (flags.n_simulations, flags.seq_len, self.V1_core_neurons)
+        self.LM_data_shape = (flags.n_simulations, flags.seq_len, self.LM_neurons)
+        self.LM_core_data_shape = (flags.n_simulations, flags.seq_len, self.LM_core_neurons)
+        self.LGN_data_shape = (flags.n_simulations, flags.seq_len, flags.n_input)
+
+        with h5py.File(os.path.join(self.data_path, 'simulation_data.hdf5'), 'w') as f:
+            g = f.create_group('Data')
+            # create a group for V1 and other for LM
+            V1g = g.create_group('V1')
+            LMg = g.create_group('LM')
+            LGNg = g.create_group('LGN')
+            for key in self.keys:
+                if key=='z':
+                    V1g.create_dataset(key, self.V1_data_shape, dtype=np.uint8, 
+                                     chunks=True, compression='gzip', shuffle=True)
+                    LMg.create_dataset(key, self.LM_data_shape, dtype=np.uint8, 
+                                     chunks=True, compression='gzip', shuffle=True)
+                elif key=='z_lgn':
+                    LGNg.create_dataset(key, self.LGN_data_shape, dtype=np.uint8, 
+                                     chunks=True, compression='gzip', shuffle=True)
+                else:
+                    V1g.create_dataset(key, self.V1_core_data_shape, dtype=self.dtype, 
+                                     chunks=True, compression='gzip', shuffle=True)
+                    LMg.create_dataset(key, self.LM_core_data_shape, dtype=self.dtype,
+                                        chunks=True, compression='gzip', shuffle=True)
+                
+            for flag, val in flags.flag_values_dict().items():
+                if isinstance(val, (float, int, str, bool)):
+                    g.attrs[flag] = val
+            g.attrs['Date'] = time.time()
+                
+    def __call__(self, simulation_data, trial):
+        with h5py.File(os.path.join(self.data_path, 'simulation_data.hdf5'), 'a') as f:
+            # iterate over the keys of simulation_data
+            for area in simulation_data.keys():
+                for key, val in simulation_data[area].items():
+                    if key in ['z', 'z_lgn']:
+                        val = np.array(val).astype(np.uint8)
+                        # val = np.packbits(val)
+                    else:
+                        if area == 'V1':
+                            val = np.array(val)[:, :, self.V1_core_mask].astype(self.dtype)
+                        elif area == 'LM':
+                            val = np.array(val)[:, :, self.LM_core_mask].astype(self.dtype)
+
+                    # Save the data
+                    f['Data'][area][key][trial, :, :] = val
+
+     
+
+def load_simulation_results_hdf5(full_data_path, n_simulations=None, skip_first_simulation=False, 
+                                variables=None):
+    # Prepare dictionary to store the simulation metadata
+    flags_dict = {}
+    with h5py.File(full_data_path, 'r') as f:
+        dataset = f['Data']
+        flags_dict.update(dataset.attrs)
+        # Get the simulation features
+        if n_simulations is None:
+            n_simulations = dataset['Data']['V1']['z'].shape[0]
+        first_simulation = 0
+        last_simulation = n_simulations
+        if skip_first_simulation:
+            n_simulations -= 1
+            first_simulation += 1
+        # Select the variables for the extraction
+        if variables == None:
+            variables = ['v', 'z', 'input_current', 'recurrent_current', 'bottom_up_current', 'z_lgn']
+        if type(variables) == str:
+            variables = [variables]
+
+        # Extract the simulation data
+        data = {}
+        if 'z_lgn' in variables:
+            data['LGN'] = {}
+            data['LGN']['z_lgn'] = np.array(dataset['LGN']['z_lgn'][first_simulation:last_simulation, :,:]).astype(np.uint8)
+
+        else:
+            for area in dataset.keys():
+                if area != 'LGN':
+                    data[area] = {}
+                    for key in variables:
+                        if key == 'z':
+                            data[area][key] = np.array(dataset[area][key][first_simulation:last_simulation, :,:]).astype(np.uint8) 
+                        else:
+                            data[area][key] = np.array(dataset[area][key][first_simulation:last_simulation, :,:]).astype(np.float32)
+            
+    # if len(variables) == 1:
+    #     data = data[key]
+    #         
+    return data, flags_dict, n_simulations

@@ -93,20 +93,31 @@ def main(_):
     # Select the connectivity rules in the network
     V1_to_LM_neurons_ratio = 7.010391285652859
 
-    if flags.realistic_neurons_ratio:
+    if flags.realistic_neurons_ratio and flags.LM_neurons is None:
         n_neurons = {'V1': flags.V1_neurons,
                      'LM': int(flags.V1_neurons/V1_to_LM_neurons_ratio)}
     else:
         n_neurons = {'V1': flags.V1_neurons,
                      'LM': flags.LM_neurons}
 
+    # Get the neurons of each column of the network
     V1_neurons = n_neurons['V1']
     LM_neurons = n_neurons['LM']
 
-    path = os.path.join(
-        flags.save_dir, f'orien_{str(flags.gratings_orientation)}_freq_{str(flags.gratings_frequency)}_V1_{V1_neurons}_LM_{LM_neurons}')
-    os.makedirs(path, exist_ok=True)
-    with open(os.path.join(path, 'flags_config.json'), 'w') as fp:
+    # Save the configuration of the model
+    # simulation_results_path = f'{flags.save_dir}/V1_{V1_neurons}_LM_{LM_neurons}_s{flags.seed}_c{flags.core_only}_con{flags.connected_selection}_interarea_weight_distribution_{flags.interarea_weight_distribution}'
+    simulation_results_path = f'{flags.save_dir}/V1_{V1_neurons}_LM_{LM_neurons}'
+    for name, value in flags.flag_values_dict().items():
+        if value != flags[name].default and name not in ['save_dir', 'v', 'verbosity', 'n_simulations', 'caching', 'V1_neurons', 'LM_neurons', 'gratings_orientation', 'gratings_frequency']:
+            print(name, value, flags[name].default)
+            simulation_results_path += f'_{name}_{value}'
+    simulation_results_path = os.path.join(simulation_results_path, f'orien_{flags.gratings_orientation}_freq_{flags.gratings_frequency}')
+    print(simulation_results_path)
+
+    # simulation_results_path = f'{flags.save_dir}/V1_{V1_neurons}_LM_{LM_neurons}_s{flags.seed}_c{flags.core_only}_con{flags.connected_selection}_L4_weight_factor_{flags.L4_weight_factor}'
+    # simulation_results_path = os.path.join(simulation_results_path, f'orien_{str(flags.gratings_orientation)}_freq_{str(flags.gratings_frequency)}')
+    os.makedirs(simulation_results_path, exist_ok=True)
+    with open(os.path.join(simulation_results_path, 'flags_config.json'), 'w') as fp:
         json.dump(flags.flag_values_dict(), fp)
 
     # Allow for memory growth (also to observe memory consumption)
@@ -144,68 +155,33 @@ def main(_):
     else:
         load_fn = load_sparse.load_billeh
 
-    input_population, networks, bkg_weights, n_input = load_fn(
-        flags, n_neurons)
+    input_population, networks, bkg_weights, n_input = load_fn(flags, n_neurons)
 
     input_weight_scale = 1.
 
     ### LGN INPUT ###
-    # lgn_firing_rates_filename = f'orientation_{flags.gratings_orientation}&TF_{flags.gratings_frequency}&SF_0.04&reverse_False&init_screen_dur_0.5&visual_flow_dur_2.0&end_screen_dur_0.0&min_value_-1&max_value_1&contrast_0.8&dt_0.001&height_120&width_240&init_gray_screen_True&end_gray_screen_True.lzma'
-    # with open(os.path.join(parentDir, 'Visual_stimulus', 'DriftingGratings', 'LGN_firing_rates', lgn_firing_rates_filename), 'rb') as f:
-    #     firing_rates = file_management.load_lzma(f)
-
-    lgn_firing_rates_filename = f"orientation_{str(flags.gratings_orientation)}&TF_{str(float(flags.gratings_frequency))}&SF_0.04&reverse_False&init_screen_dur_1.0&visual_flow_dur_1.0&end_screen_dur_1.0&min_value_-1&max_value_1&contrast_0.8&dt_0.001&height_120&width_240&init_gray_screen_False&end_gray_screen_False.lzma"
-
-    with open(
-        os.path.join(
-            flags.data_dir, "input", "Drifting_gratings", lgn_firing_rates_filename
-        ),
-        "rb",
-    ) as f:
+    # lgn_firing_rates_filename = f"orientation_{str(flags.gratings_orientation)}&TF_{str(float(flags.gratings_frequency))}&SF_0.04&reverse_False&init_screen_dur_1.0&visual_flow_dur_1.0&end_screen_dur_1.0&min_value_-1&max_value_1&contrast_0.8&dt_0.001&height_120&width_240&init_gray_screen_False&end_gray_screen_False.lzma"
+    lgn_firing_rates_filename = f"orientation_{str(flags.gratings_orientation)}&TF_{str(float(flags.gratings_frequency))}&SF_0.04&reverse_False&init_screen_dur_0.5&visual_flow_dur_2.5&end_screen_dur_0.0&min_value_-1&max_value_1&contrast_0.8&dt_0.001&height_120&width_240&init_gray_screen_True&end_gray_screen_False.lzma"
+    with open(os.path.join(flags.data_dir, "input", "Drifting_gratings", lgn_firing_rates_filename), "rb") as f:
         firing_rates = file_management.load_lzma(f)
-
     # firing_rates are the probability of spikes/seconds so we convert that to spike/ms
     # then, if random number in 0-1 is lower that firing_rate in spike/ms, there is a
     # neuron spike at that ms
+    # firing_rates = firing_rates[None, 500: flags.seq_len + 500]  # (1,2500,17400)
+    firing_rates = firing_rates[None, :]
 
-    # firing_rates = firing_rates[None, :flags.seq_len]  # (1,2500,17400)
-    firing_rates = firing_rates[None,
-                                500: flags.seq_len + 500]  # (1,2500,17400)
-
-    # Isolate the core neurons
-    V1_core_neurons = 51978
-    V1_core_radius = 400
-    LM_core_neurons = 7285
-    LM_core_radius = V1_core_radius/np.sqrt(V1_to_LM_neurons_ratio)
-
-    if V1_neurons > V1_core_neurons:
-        # core_network = load_sparse.load_network(core_only=True)
-        V1_core_mask = other_billeh_utils.isolate_core_neurons(
-            networks['V1'], radius=V1_core_radius, data_dir=flags.data_dir)
-    else:
-        V1_core_neurons = V1_neurons
-        # core_network = network
-        V1_core_mask = np.full(V1_core_neurons, True)
-
-    if LM_neurons > LM_core_neurons:
-        # core_network = load_sparse.load_network(core_only=True)
-        LM_core_mask = other_billeh_utils.isolate_core_neurons(
-            networks['LM'], radius=LM_core_radius, data_dir=flags.data_dir)
-    else:
-        LM_core_neurons = LM_neurons
-        # core_network = network
-        LM_core_mask = np.full(LM_core_neurons, True)
-
-    data_path = os.path.join(path, 'Data')
+    # Create data_path to save simulation data 
+    data_path = os.path.join(simulation_results_path, 'Data')
     os.makedirs(data_path, exist_ok=True)
 
+    # Build the model
     model = models.create_model(
         networks, input_population, bkg_weights, inputIsspike=True,
         output_completed_valid_from_time=120, output_abstract_valid_from_time=100,
         seq_len=flags.seq_len, n_input=flags.n_input, dtype=tf.float32, input_weight_scale=1.,
         interarea_weight_scale=1., gauss_std=flags.gauss_std, dampening_factor=flags.dampening_factor, lr_scale=flags.lr_scale,
         train_recurrent_V1=flags.train_recurrent_V1, train_recurrent_LM=flags.train_recurrent_LM, train_input=flags.train_input, train_interarea=flags.train_interarea,
-        use_state_input=True, return_state=True, add_rate_metric=True, max_delay=5, batch_size=flags.batch_size, pseudo_gauss=flags.pseudo_gauss)
+        use_state_input=True, return_state=True, add_rate_metric=True, max_delay=5, batch_size=flags.batch_size, pseudo_gauss=flags.pseudo_gauss, hard_reset=flags.hard_reset)
 
     model.build((flags.batch_size, flags.seq_len, flags.n_input))
 
@@ -215,6 +191,7 @@ def main(_):
     # prediction_layer = model.get_layer('prediction')
     abstract_layer = model.get_layer('abstract_output')
 
+    # Create a model that returns the variables of interest as first output, and the abstract output and completed output in second place
     extractor_model = tf.keras.Model(inputs=model.inputs,
                                      outputs=[rsnn_layer.output, model.output[0], model.output[1]])
 
@@ -225,68 +202,82 @@ def main(_):
     # These "dummy" zeros are injected to the models membrane voltage
     # Provides the opportunity to compute gradients wrt. membrane voltages at all time steps
     # Not important for general use
-    zero_state = rsnn_layer.cell.zero_state_multi_areas(
-        flags.batch_size, np.float32)
+    zero_state = rsnn_layer.cell.zero_state_multi_areas(flags.batch_size, np.float32)
     n_total_neurons = n_neurons['V1'] + n_neurons['LM']
-    dummy_zeros = tf.zeros(
-        (flags.batch_size, flags.seq_len, n_total_neurons), dtype)
+    dummy_zeros = tf.zeros((flags.batch_size, flags.seq_len, n_total_neurons), dtype)
     inputs = tf.zeros((flags.batch_size, flags.seq_len, flags.n_input), dtype)
     state = zero_state
 
+    keys = ["z", "v", "z_lgn"] # "input_current", "recurrent_current", "bottom_up_current"
+    
+    # Select the dtype of the data saved
+    if flags.save_float16:
+        save_dtype = np.float16
+    else:
+        save_dtype = np.float32
+    data_path = os.path.join(simulation_results_path, "Data")
+
+    SimulationDataHDF5 = other_billeh_utils.SaveSimDataHDF5(
+        flags, keys, data_path, networks, n_neurons, V1_to_LM_neurons_ratio, save_core_only=True, dtype=save_dtype
+    )
+
     time_per_sim = 0
     time_per_save = 0
-    for stimuli in range(0, flags.n_simulations):
-        print('{stimuli}:new stimuli'.format(stimuli=stimuli))
+    for trial in range(0, flags.n_simulations):
+        print('{trial}:new trial'.format(trial=trial))
         inputs = (np.random.uniform(size=inputs.shape,
                                     low=0., high=1.) < firing_rates * .001).astype(np.float32)
+        # Simulate the model for one stimulus sequence
         t0 = time()
-        # out = extractor_model((inputs, dummy_zeros, state))
-        out = extractor_model((inputs, dummy_zeros, state)
-                              )  # inputs should go here
-
+        out = extractor_model((inputs, dummy_zeros, state))
         time_per_sim += time() - t0
 
+        # Extract spikes and membrane voltages
         t0 = time()
-
         network_outputs = out[0][0]
         V1_spikes, V1_voltage, LM_spikes, LM_voltage = network_outputs
 
-        V1_spikes = np.array(tf.cast(V1_spikes, tf.int8))
-        LM_spikes = np.array(tf.cast(LM_spikes, tf.int8))
-        V1_voltage = np.array(tf.cast(V1_voltage, tf.float16))[
-            :, :, V1_core_mask]
-        LM_voltage = np.array(tf.cast(LM_voltage, tf.float16))[
-            :, :, LM_core_mask]
-
-        # file_management.save_lzma(V1_voltage, 'V1_v_{n_neurons}_{stimuli}.lzma'.format(
-        #     n_neurons=flags.V1_neurons, stimuli=stimuli), data_path)
-        file_management.save_lzma(V1_spikes, 'V1_z_{n_neurons}_{stimuli}.lzma'.format(
-            n_neurons=V1_neurons, stimuli=stimuli), data_path)
-        # file_management.save_lzma(LM_voltage, 'LM_v_{n_neurons}_{stimuli}.lzma'.format(
-        #     n_neurons=flags.LM_neurons, stimuli=stimuli), data_path)
-        file_management.save_lzma(LM_spikes, 'LM_z_{n_neurons}_{stimuli}.lzma'.format(
-            n_neurons=LM_neurons, stimuli=stimuli), data_path)
-
+        # Save simulation data
+        simulation_data = {
+            "V1": {
+                "z": V1_spikes,
+                # "v": V1_voltage
+            },
+            "LM": {
+                "z": LM_spikes,
+                # "v": LM_voltage
+            },
+            "LGN": {
+                "z_lgn": inputs
+            }
+        }
+        
+        SimulationDataHDF5(simulation_data, trial)
         time_per_save += time() - t0
+
+        # Reset the model state to the last state of the previous simulation
         state = out[0][1:]
 
+    # Save the simulation metadata  
     time_per_sim /= flags.n_simulations
     time_per_save /= flags.n_simulations
-
     metadata_path = os.path.join(data_path, 'Simulation stats')
     with open(metadata_path, 'w') as out_file:
         out_file.write(f'Consumed time per simulation: {time_per_sim}\n')
         out_file.write(f'Consumed time saving: {time_per_save}\n')
 
-    # Plot last stimuli response
+    # Plot last trial raster plot
     raster_filename = 'Raster_plot.png'
-    image_path = os.path.join(path, 'Images general')
+    image_path = os.path.join(simulation_results_path, 'Images general')
     os.makedirs(image_path, exist_ok=True)
     graph = InputActivityFigure(networks, flags.data_dir, image_path,
-                                filename=raster_filename, frequency=flags.gratings_frequency)
+                                filename=raster_filename, frequency=flags.gratings_frequency,
+                                stimuli_init_time=500, stimuli_end_time=3000)
     graph(inputs, V1_spikes, LM_spikes)
+
+    # Plot last trial LGN sample plot
     LGN_units = LGN_sample_plot(firing_rates, inputs, stimuli_init_time=0.5,
-                                stimuli_end_time=2.5, images_dir=image_path, n_samples=2)
+                                stimuli_end_time=flags.seq_len/1000, images_dir=image_path, n_samples=2)
     LGN_units()
 
     ### TRAINING ###
@@ -397,8 +388,7 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_string('images_dir', _images_dir, '')
     absl.app.flags.DEFINE_string('restore_from', '', '')
     absl.app.flags.DEFINE_string('comment', '', '')
-    absl.app.flags.DEFINE_string(
-        'interarea_weight_distribution', 'billeh_like', '')
+    absl.app.flags.DEFINE_string('interarea_weight_distribution', 'billeh_like', '')
     absl.app.flags.DEFINE_integer('gratings_orientation', 0, '')
     absl.app.flags.DEFINE_integer('gratings_frequency', 2, '')
     absl.app.flags.DEFINE_integer('n_simulations', 20, '')
@@ -411,16 +401,15 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_float('gauss_std', .3, '')
     absl.app.flags.DEFINE_float('lr_scale', 1., '')
     absl.app.flags.DEFINE_float('input_f0', 0.2, '')
+    absl.app.flags.DEFINE_float('E4_weight_factor', 1., '')
 
     absl.app.flags.DEFINE_integer('n_epochs', 20, '')
-    absl.app.flags.DEFINE_integer('batch_size', 16, '')
-    absl.app.flags.DEFINE_integer(
-        'V1_neurons', 10, '')  # -1 to take all neurons
-    absl.app.flags.DEFINE_integer(
-        'LM_neurons', 80, '')  # -1 to take all neurons
+    absl.app.flags.DEFINE_integer('batch_size', 1, '')
+    absl.app.flags.DEFINE_integer('V1_neurons', 10, '')  # -1 to take all neurons
+    absl.app.flags.DEFINE_integer('LM_neurons', None, '')  # -1 to take all neurons
     # number of LGN filters in visual space (input population)
     absl.app.flags.DEFINE_integer('n_input', 17400, '')
-    absl.app.flags.DEFINE_integer('seq_len', 2500, '')
+    absl.app.flags.DEFINE_integer('seq_len', 3000, '')
     absl.app.flags.DEFINE_integer('n_cues', 3, '')
     absl.app.flags.DEFINE_integer('recall_duration', 40, '')
     absl.app.flags.DEFINE_integer('cue_duration', 40, '')
@@ -431,8 +420,11 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_integer('neurons_per_output', 16, '')
 
     absl.app.flags.DEFINE_boolean('float16', False, '')
+    absl.app.flags.DEFINE_boolean("save_float16", True, "")
     absl.app.flags.DEFINE_boolean('caching', True, '')
     absl.app.flags.DEFINE_boolean('core_only', False, '')
+    absl.app.flags.DEFINE_boolean('hard_reset', False, '')
+    absl.app.flags.DEFINE_boolean('disconnect_LM_L6_inhibition', False, '')
     absl.app.flags.DEFINE_boolean('realistic_neurons_ratio', True, '')
     absl.app.flags.DEFINE_boolean('train_recurrent_V1', True, '')
     absl.app.flags.DEFINE_boolean('train_recurrent_LM', True, '')
