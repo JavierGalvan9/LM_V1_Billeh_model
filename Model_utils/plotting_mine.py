@@ -4,11 +4,12 @@ import pandas as pd
 from matplotlib import patches
 import matplotlib.pyplot as plt
 import h5py
-from Model_utils import toolkit
+from Model_utils import toolkit, other_billeh_utils
 
 
 class InputActivityFigure:
-    def __init__(self, networks, data_dir, images_dir='Images', filename="Raster_plot", batch_ind=0, scale=3., frequency=2, drifting_init_time=500, drifting_end_time=1500, reverse=False):
+    def __init__(self, networks, data_dir, images_dir='Images', filename="Raster_plot", batch_ind=0, scale=3, 
+                 frequency=2, stimuli_init_time=500, stimuli_end_time=1500, reverse=False, plot_core_only=True):
         self.figure = plt.figure(
             figsize=toolkit.cm2inch((15 * scale, 11 * scale)))
         gs = self.figure.add_gridspec(11, 1)
@@ -18,19 +19,46 @@ class InputActivityFigure:
         self.drifting_grating_ax = self.figure.add_subplot(gs[-1])
 
         self.inputs_plot = RasterPlot(
-            batch_ind=batch_ind, scale=scale, y_label='LGN Neuron ID', alpha=.05)
+            batch_ind=batch_ind,
+            stimuli_init_time=stimuli_init_time,
+            stimuli_end_time=stimuli_end_time,
+            scale=scale,
+            y_label="LGN Neuron ID",
+            alpha=0.05,
+        )
         self.V1_laminar_plot = LaminarPlot(
-            networks['V1'], data_dir, area_name='V1', batch_ind=batch_ind, scale=scale, alpha=.2)
+            networks['V1'], 
+            data_dir, 
+            area_name='V1', 
+            batch_ind=batch_ind, 
+            stimuli_init_time=stimuli_init_time,
+            stimuli_end_time=stimuli_end_time,
+            scale=scale, 
+            alpha=.2
+            )
         self.LM_laminar_plot = LaminarPlot(
-            networks['LM'], data_dir, area_name='LM', batch_ind=batch_ind, scale=scale, alpha=.2)
+            networks['LM'], 
+            data_dir, 
+            area_name='LM', 
+            batch_ind=batch_ind, 
+            stimuli_init_time=stimuli_init_time,
+            stimuli_end_time=stimuli_end_time,
+            scale=scale, 
+            alpha=.2
+            )
         self.drifting_grating_plot = DriftingGrating(
-            frequency=frequency, drifting_init_time=drifting_init_time, drifting_end_time=drifting_end_time, reverse=reverse, scale=scale)
+            frequency=frequency, 
+            stimuli_init_time=stimuli_init_time, 
+            stimuli_end_time=stimuli_end_time, 
+            reverse=reverse, 
+            scale=scale
+            )
 
         self.tightened = True  # False
         self.scale = scale
         self.networks = networks
-        self.n_neurons = self.networks['V1']['n_nodes'] + \
-            self.networks['LM']['n_nodes']
+        # self.n_neurons = self.networks['V1']['n_nodes'] + \
+        #     self.networks['LM']['n_nodes']
         self.batch_ind = batch_ind
         self.images_dir = images_dir
         self.filename = filename
@@ -53,7 +81,8 @@ class InputActivityFigure:
         self.LM_activity_ax.set_xticklabels([])
         toolkit.apply_style(self.LM_activity_ax, scale=self.scale)
 
-        self.drifting_grating_plot(self.drifting_grating_ax, V1_spikes)
+        simulation_length = V1_spikes.shape[1]
+        self.drifting_grating_plot(self.drifting_grating_ax, simulation_length)
         toolkit.apply_style(self.drifting_grating_ax, scale=self.scale)
 
         if not self.tightened:
@@ -61,7 +90,7 @@ class InputActivityFigure:
             self.tightened = True
 
         self.figure.savefig(os.path.join(
-            self.images_dir, self.filename), dpi=300)
+            self.images_dir, self.filename), dpi=300, transparent=True)
 
         return self.figure
 
@@ -88,8 +117,20 @@ def pop_ordering(x):
 
 
 class RasterPlot:
-    def __init__(self, batch_ind=0, scale=2., marker_size=1., alpha=.03, color='r', y_label='Neuron ID'):
+    def __init__(
+        self,
+        batch_ind=0,
+        stimuli_init_time=500,
+        stimuli_end_time=1500,
+        scale=2.0,
+        marker_size=1.0,
+        alpha=0.03,
+        color="r",
+        y_label="Neuron ID",
+    ):
         self.batch_ind = batch_ind
+        self.stimuli_init_time = stimuli_init_time
+        self.stimuli_end_time = stimuli_end_time
         self.scale = scale
         self.marker_size = marker_size
         self.alpha = alpha
@@ -99,13 +140,14 @@ class RasterPlot:
     def __call__(self, ax, spikes):
         # This method plots the spike train (spikes) that enters the network
         n_elements = np.prod(spikes.shape)
-        non_binary_frac = np.sum(np.logical_and(
-            spikes > 1e-3, spikes < 1 - 1e-3)) / n_elements
-        if non_binary_frac > .01:
+        non_binary_frac = (
+            np.sum(np.logical_and(spikes > 1e-3, spikes < 1 - 1e-3)) / n_elements
+        )
+        if non_binary_frac > 0.01:
             rate = -np.log(1 - spikes[self.batch_ind] / 1.3) * 1000
             # rate = rate.reshape((rate.shape[0], int(rate.shape[1] / 100), 100)).mean(-1)
-            p = ax.pcolormesh(rate.T, cmap='cividis')
-            toolkit.do_inset_colorbar(ax, p, '')
+            p = ax.pcolormesh(rate.T, cmap="cividis")
+            toolkit.do_inset_colorbar(ax, p, "")
             ax.set_ylim([0, rate.shape[-1]])
             ax.set_yticks([0, rate.shape[-1]])
             # ax.set_yticklabels([0, rate.shape[-1] * 100])
@@ -113,27 +155,62 @@ class RasterPlot:
             ax.set_ylabel(self.y_label, fontsize=20)
         else:
             # Take the times where the spikes occur
-            times, ids = np.where(spikes[self.batch_ind].astype(np.float) > .5)
-            ax.plot(times, ids, '.', color=self.color,
-                    ms=self.marker_size, alpha=self.alpha)
+            times, ids = np.where(
+                spikes[self.batch_ind].astype(np.float32) > 0.5)
+            ax.plot(
+                times, ids, ".", color=self.color, ms=self.marker_size, alpha=self.alpha
+            )
             ax.set_ylim([0, spikes.shape[-1]])
             ax.set_yticks([0, spikes.shape[-1]])
             ax.set_ylabel(self.y_label, fontsize=20)
 
-        ax.axvline(500, linestyle='dashed', color='k', linewidth=1.5, alpha=1)
-        ax.axvline(1500, linestyle='dashed', color='k', linewidth=1.5, alpha=1)
+        ax.axvline(
+            self.stimuli_init_time,
+            linestyle="dashed",
+            color="k",
+            linewidth=1.5,
+            alpha=1,
+        )
+        ax.axvline(
+            self.stimuli_end_time, linestyle="dashed", color="k", linewidth=1.5, alpha=1
+        )
         ax.set_xlim([0, spikes.shape[1]])
         ax.set_xticks([0, spikes.shape[1]])
-        ax.tick_params(axis='both', which='major', labelsize=18)
+        ax.tick_params(axis="both", which="major", labelsize=18)
 
 
 class LaminarPlot:
-    def __init__(self, network, data_dir, area_name='V1', batch_ind=0, scale=2., marker_size=1., alpha=.2):
+    def __init__(self, network, data_dir, area_name='V1', batch_ind=0, 
+                 scale=2., stimuli_init_time=500, stimuli_end_time=1500,
+                 marker_size=1., alpha=.2, plot_core_only=True):
         self.batch_ind = batch_ind
+        self.stimuli_init_time = stimuli_init_time
+        self.stimuli_end_time = stimuli_end_time
         self.scale = scale
         self.marker_size = marker_size
         self.alpha = alpha
+        self.data_dir = data_dir
+        self.network = network
         self.area_name = area_name
+        self.n_neurons = network["n_nodes"]
+
+        if self.area_name == 'V1':
+            self.core_neurons = 51978
+            core_radius = 400
+        elif self.area_name == 'LM':
+            self.core_neurons = 7285
+            V1_to_LM_neurons_ratio = 7.010391285652859
+            core_radius = 400/np.sqrt(V1_to_LM_neurons_ratio)
+        else:
+            raise ValueError('Area not supported')
+
+        if plot_core_only:
+            if self.n_neurons > self.core_neurons:
+                self.n_neurons = self.core_neurons
+            self.core_mask = other_billeh_utils.isolate_core_neurons(
+                self.network, radius=core_radius, data_dir=self.data_dir)
+        else:
+            self.core_mask = np.full(self.n_neurons, True)
 
         node_types = pd.read_csv(os.path.join(
             data_dir, f'network/{self.area_name}_node_types.csv'), sep=' ')
@@ -155,27 +232,22 @@ class LaminarPlot:
             true_pop_names.append(node_type_id_to_pop_name[nid])
 
         # Select population names of neurons in the present network (core)
-        true_pop_names = np.array(true_pop_names)[network['tf_id_to_bmtk_id']]
-        true_node_type_ids = node_type_ids[network['tf_id_to_bmtk_id']]
+        true_pop_names = np.array(true_pop_names)[network['tf_id_to_bmtk_id']][self.core_mask]
+        true_node_type_ids = node_type_ids[network['tf_id_to_bmtk_id']][self.core_mask]
 
         # Now order the pop_names according to their layer and type
         pop_orders = dict(sorted(node_type_id_to_pop_name.items(),
                           key=lambda item: pop_ordering(item[1])))
 
-        # We can have an array with the population names in order as follows:
-        n_neurons = network['n_nodes']
-        self.network = network
-        self.n_neurons = n_neurons
-
         # Now we convert the neuroon id (related to its pop_name) to an index related to its position in the y axis
         # rest 1 to check at the end if every neuron has an index
-        neuron_id_to_y = np.zeros(n_neurons, np.int32) - 1
+        neuron_id_to_y = np.zeros(self.n_neurons, np.int32) - 1
         current_ind = 0
 
-        self.e_mask = np.zeros(n_neurons, bool)
-        self.htr3_mask = np.zeros(n_neurons, bool)
-        self.sst_mask = np.zeros(n_neurons, bool)
-        self.pvalb_mask = np.zeros(n_neurons, bool)
+        self.e_mask = np.zeros(self.n_neurons, np.bool_)
+        self.htr3a_mask = np.zeros(self.n_neurons, np.bool_)
+        self.sst_mask = np.zeros(self.n_neurons, np.bool_)
+        self.pvalb_mask = np.zeros(self.n_neurons, np.bool_)
 
         layer_bounds = []
         ie_bounds = []
@@ -199,7 +271,7 @@ class LaminarPlot:
             if pop_name[0] == 'e':
                 self.e_mask = np.logical_or(self.e_mask, sel)
             elif pop_name.count('Htr3') > 0:
-                self.htr3_mask = np.logical_or(self.htr3_mask, sel)
+                self.htr3a_mask = np.logical_or(self.htr3a_mask, sel)
             elif pop_name.count('Sst') > 0:
                 self.sst_mask = np.logical_or(self.sst_mask, sel)
             elif pop_name.count('Pvalb') > 0:
@@ -220,9 +292,9 @@ class LaminarPlot:
         # dist = int(n_l5e / n_readout_pops)
         # #####################################
 
-        y_to_neuron_id = np.zeros(n_neurons, np.int32)
-        y_to_neuron_id[neuron_id_to_y] = np.arange(n_neurons)
-        assert np.all(y_to_neuron_id[neuron_id_to_y] == np.arange(n_neurons))
+        y_to_neuron_id = np.zeros(self.n_neurons, np.int32)
+        y_to_neuron_id[neuron_id_to_y] = np.arange(self.n_neurons)
+        assert np.all(y_to_neuron_id[neuron_id_to_y] == np.arange(self.n_neurons))
         # y_to_neuron_id: E.g., la neurona séptima por orden de capas tiene id 0, y_to_neuron_id[7]=0
         # neuron_id_to_y: E.g., la neurona con id 0 es la séptima por orden de capas, neuron_id_to_y[0] = 7
 
@@ -241,13 +313,13 @@ class LaminarPlot:
         #                                                       ] = other_id, readout_id
         ###########################
 
-        self.neuron_id_to_y = n_neurons - neuron_id_to_y  # plot the L1 top and L6 bottom
+        self.neuron_id_to_y = self.n_neurons - neuron_id_to_y  # plot the L1 top and L6 bottom
 
     def __call__(self, ax, spikes):
         scale = self.scale
         ms = self.marker_size
         alpha = self.alpha
-
+        seq_len = spikes.shape[1]
         layer_label = ['1', '2/3', '4', '5', '6']
         for i, (y, h) in enumerate(zip(self.layer_bounds, np.diff(self.layer_bounds, append=[self.n_neurons]))):
             ax.annotate(
@@ -256,30 +328,29 @@ class LaminarPlot:
             if i % 2 != 0:
                 continue
             rect = patches.Rectangle(
-                (0, self.n_neurons - y - h), spikes.shape[1], h, color='gray', alpha=.1)
+                (0, self.n_neurons - y - h), seq_len, h, color='gray', alpha=.1)
             ax.add_patch(rect)
 
+        spikes = np.array(spikes)
+        spikes = np.transpose(spikes[self.batch_ind, :, self.core_mask])
+
         # e
-        times, ids = np.where(
-            spikes[self.batch_ind] * self.e_mask[None, :].astype(np.float))
+        times, ids = np.where(spikes * self.e_mask[None, :].astype(np.float32))
         _y = self.neuron_id_to_y[ids]
         ax.plot(times, _y, '.', color='r', ms=ms, alpha=alpha)
 
         # htr3
-        times, ids = np.where(
-            spikes[self.batch_ind] * self.htr3_mask[None, :].astype(np.float))
+        times, ids = np.where(spikes * self.htr3a_mask[None, :].astype(np.float32))
         _y = self.neuron_id_to_y[ids]
         ax.plot(times, _y, '.', color='darkviolet', ms=ms, alpha=alpha)
 
         # sst
-        times, ids = np.where(
-            spikes[self.batch_ind] * self.sst_mask[None, :].astype(np.float))
+        times, ids = np.where(spikes * self.sst_mask[None, :].astype(np.float32))
         _y = self.neuron_id_to_y[ids]
         ax.plot(times, _y, '.', color='g', ms=ms, alpha=alpha)
 
         # pvalb
-        times, ids = np.where(
-            spikes[self.batch_ind] * self.pvalb_mask[None, :].astype(np.float))
+        times, ids = np.where(spikes * self.pvalb_mask[None, :].astype(np.float32))
         _y = self.neuron_id_to_y[ids]
         ax.plot(times, _y, '.', color='b', ms=ms, alpha=alpha)
 
@@ -307,14 +378,18 @@ class LaminarPlot:
                 ms=6, alpha=.9, label='Excitatory')
         # ax.plot([-1, -1], [-1, -1], '.', color='k',
         #         ms=4, alpha=.9, label='Readout (L5e)')
-        seq_len = spikes.shape[1]
+
         # bg = patches.Rectangle((480 / 2050 * seq_len, 0), 300 / 2050 * seq_len,
         #                        220 / 1000 * self.n_neurons, color='white', alpha=.9, zorder=101)
         # ax.add_patch(bg)
         # ax.legend(frameon=True, facecolor='white', framealpha=.9, edgecolor='white',
         #           fontsize=5 * scale, loc='center', bbox_to_anchor=(.3, .12)).set_zorder(102)
-        ax.axvline(500, linestyle='dashed', color='k', linewidth=1.5, alpha=1)
-        ax.axvline(1500, linestyle='dashed', color='k', linewidth=1.5, alpha=1)
+        ax.axvline(
+            self.stimuli_init_time, linestyle="dashed", color="k", linewidth=1.5, alpha=1,
+        )
+        ax.axvline(
+            self.stimuli_end_time, linestyle="dashed", color="k", linewidth=1.5, alpha=1
+        )
         ax.set_ylim([0, self.n_neurons])
         ax.set_yticks([0, self.n_neurons])
         ax.set_ylabel(f'{self.area_name} Neuron ID', fontsize=20)
@@ -324,33 +399,39 @@ class LaminarPlot:
 
 
 class DriftingGrating:
-    def __init__(self, scale=2., frequency=2., drifting_init_time=500, drifting_end_time=1500, reverse=False, marker_size=1., alpha=1, color='g'):
+    def __init__(self, scale=2., frequency=2., stimuli_init_time=500, stimuli_end_time=1500, reverse=False, marker_size=1., alpha=1, color='g'):
         self.marker_size = marker_size
         self.alpha = alpha
         self.color = color
         self.scale = scale
-        self.drifting_init_time = drifting_init_time
-        self.drifting_end_time = drifting_end_time
+        self.stimuli_init_time = stimuli_init_time
+        self.stimuli_end_time = stimuli_end_time
         self.reverse = reverse
         self.frequency = frequency
 
-    def __call__(self, ax, spikes):
-        times = np.arange(spikes.shape[1])
-        stimuli_speed = np.zeros((spikes.shape[1]))
+    def __call__(self, ax, simulation_length, stimulus_length=None):
+        if stimulus_length is None:
+            stimulus_length = simulation_length
+
+        times = np.arange(stimulus_length)
+        stimuli_speed = np.zeros((stimulus_length))
         if self.reverse:
-            stimuli_speed[:self.drifting_init_time] = self.frequency
-            stimuli_speed[self.drifting_end_time:] = self.frequency
+            stimuli_speed[:self.stimuli_init_time] = self.frequency
+            stimuli_speed[self.stimuli_end_time:] = self.frequency
         else:
-            stimuli_speed[self.drifting_init_time:self.drifting_end_time] = self.frequency
+            stimuli_speed[self.stimuli_init_time:self.stimuli_end_time] = self.frequency
 
         ax.plot(times, stimuli_speed, color=self.color,
                 ms=self.marker_size, alpha=self.alpha, linewidth=2*self.scale)
-        ax.set_ylabel('Visual flow \n [Hz]')
-        ax.set_yticks([0, self.frequency], ['0', f'{self.frequency}'])
-        ax.set_xlim([0, spikes.shape[1]])
-        ax.set_xticks(np.linspace(0, spikes.shape[1], 6))
-        ax.set_xlabel('Time [ms]', fontsize=20)
-        ax.tick_params(axis='both', which='major', labelsize=18)
+        ax.set_ylabel('TF \n [Hz]')
+        ax.set_yticks([0, self.frequency])
+        ax.set_yticklabels(["0", f"{self.frequency}"])
+        ax.set_xlim([0, stimulus_length])
+        ax.set_xticks(np.linspace(0, stimulus_length, 6))
+        ax.set_xticklabels([str(int(x))
+                           for x in np.linspace(0, simulation_length, 6)])
+        ax.set_xlabel('Time [ms]') #, fontsize=20)
+        # ax.tick_params(axis='both', which='major', labelsize=18)
 
 
 class LGN_sample_plot:
