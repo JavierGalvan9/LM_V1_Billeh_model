@@ -294,8 +294,8 @@ def load_input(path,
             delays_tf = np.zeros_like(weights_tf) + edge['params']['delay']
             # if bmtk_id_to_tf_id is not None:
             # check if the given edges exist in our model
-            # (notice that only the target must exist since the source is whithin the LGN module)
-            # This means that source index is whithin 0-17400
+            # (notice that only the target must exist since the source is within the LGN module)
+            # This means that source index is within 0-17400
             target_tf_id = bmtk_id_to_tf_id[target_bmtk_id]
             edge_exists = target_tf_id >= 0
             target_tf_id = target_tf_id[edge_exists]
@@ -319,8 +319,8 @@ def load_input(path,
 
         n_input_neurons = len(input_population[0]['ids'])  # 17400
         spikes = np.zeros((int(duration / dt), n_input_neurons))
-        # now we save the spikes of the input population
-        # ? no entiendo bien la presencia de estos spikes
+        
+        # now we save the spikes of the input population from the BMTK simulation
         for i, sp in zip(input_population[0]['ids'], input_population[0]['spikes']):
             # consider only the spikes within the period we are taking
             sp = sp[np.logical_and(start < sp, sp < start + duration)] - start
@@ -922,11 +922,11 @@ def load_billeh(flags, n_neurons):
         L4_e_ids = networks['LM']['laminar_indices']['L4_e']
 
         ### Increase recurrent weights to E4 in LM 
-        rec_target_indices = networks['LM']['synapses']['indices'] [:, 0] // 4
-        # Get the recurrent excitatory projections to LM e4 neurons
-        L4_e_rec_exc_edges_mask =  np.logical_and(np.isin(rec_target_indices, L4_e_ids), networks['LM']['synapses']['weights'] > 0)
-        # Increase the weight of the excitatory recurrent projections to LM e4 neurons
-        networks['LM']['synapses']['weights'][L4_e_rec_exc_edges_mask] *= flags.E4_weight_factor
+        # rec_target_indices = networks['LM']['synapses']['indices'] [:, 0] // 4
+        # # Get the recurrent excitatory projections to LM e4 neurons
+        # L4_e_rec_exc_edges_mask =  np.logical_and(np.isin(rec_target_indices, L4_e_ids), networks['LM']['synapses']['weights'] > 0)
+        # # Increase the weight of the excitatory recurrent projections to LM e4 neurons
+        # networks['LM']['synapses']['weights'][L4_e_rec_exc_edges_mask] *= flags.E4_weight_factor
 
         ### Increase interarea weights to E4 in LM
         inter_target_indices = networks['LM']['interarea_synapses']['V1']['indices'][:, 0] // 4
@@ -935,21 +935,32 @@ def load_billeh(flags, n_neurons):
         # Increase the weight of the excitatory interarea projections to LM e4 neurons
         networks['LM']['interarea_synapses']['V1']['weights'][L4_e_inter_exc_edges_mask] *= flags.E4_weight_factor
 
-    if flags.disconnect_LM_L6_inhibition:
-        print('disconnect_LM_L6_inhibition = ', flags.disconnect_LM_L6_inhibition)
+    # if flags.disconnect_LM_L6_inhibition:
+    #     print('disconnect_LM_L6_inhibition = ', flags.disconnect_LM_L6_inhibition)
+        
+    #     # Get the indices of the LM L6 neurons
+    #     L6_Sst_ids = networks['LM']['laminar_indices']['L6_i_Sst']
+    #     L6_Htr3a_ids = networks['LM']['laminar_indices']['L6_i_Htr3a']
+    #     L6_Pvalb_ids = networks['LM']['laminar_indices']['L6_i_Pvalb']
+    #     L6_inh_ids = np.concatenate((L6_Sst_ids, L6_Htr3a_ids, L6_Pvalb_ids))
+
+    #     # Get the recurrent inhibitory projections from LM i6 neurons
+    #     rec_source_indices = networks['LM']['synapses']['indices'][:, 1]
+    #     L6_inh_edges_mask = np.isin(rec_source_indices, L6_inh_ids)
+    #     # Set the weight of the recurrent inhibitory projections from LM i6 neurons to zero
+    #     networks['LM']['synapses']['weights'][L6_inh_edges_mask] = 0
+
+    if flags.disconnect_V1_LM_L6_excitatory_projections:
+        print('disconnect_V1_LM_L6_excitation = ', flags.disconnect_V1_LM_L6_excitatory_projections)
         
         # Get the indices of the LM L6 neurons
-        L6_Sst_ids = networks['LM']['laminar_indices']['L6_i_Sst']
-        L6_Htr3a_ids = networks['LM']['laminar_indices']['L6_i_Htr3a']
-        L6_Pvalb_ids = networks['LM']['laminar_indices']['L6_i_Pvalb']
-        L6_inh_ids = np.concatenate((L6_Sst_ids, L6_Htr3a_ids, L6_Pvalb_ids))
-
-        # Get the recurrent inhibitory projections from LM i6 neurons
-        rec_source_indices = networks['LM']['synapses']['indices'][:, 1]
-        L6_inh_edges_mask = np.isin(rec_source_indices, L6_inh_ids)
-        # Set the weight of the recurrent inhibitory projections from LM i6 neurons to zero
-        networks['LM']['synapses']['weights'][L6_inh_edges_mask] = 0
-
+        L6_e_ids = networks['LM']['laminar_indices']['L6_e']
+        ### Increase interarea weights to E4 in LM
+        inter_target_indices = networks['LM']['interarea_synapses']['V1']['indices'][:, 0] // 4
+        # Get the interarea excitatory projections to LM e4 neurons
+        L6_e_inter_exc_edges_mask =  np.logical_and(np.isin(inter_target_indices, L6_e_ids), networks['LM']['interarea_synapses']['V1']['weights'] > 0)
+        # Increase the weight of the excitatory interarea projections to LM e4 neurons
+        networks['LM']['interarea_synapses']['V1']['weights'][L6_e_inter_exc_edges_mask] = 0
 
     n_input = flags.n_input
     if n_input != 17400:
@@ -962,19 +973,20 @@ def load_billeh(flags, n_neurons):
 
 
 # If the model already exist we can load it, or if it does not just save it for future occasions
-def cached_load_billeh(flags, n_neurons):
+def cached_load_billeh(flags, n_neurons, flag_str=None):
     store = False
     # input_population, networks, bkg_weights, n_input, n_abstract_output, n_completed_output  = None, None, None, None, None, None
     input_population, networks, bkg_weights, n_input = None, None, None, None  # , None, None
     # flag_str = f'ratio{flags.area_neuron_ratio}_rec{flags.neurons}_s{flags.seed}_c{flags.core_only}_con{flags.connected_selection}'
     V1_neurons = n_neurons['V1']
     LM_neurons = n_neurons['LM']
-    flag_str = f'V1_{V1_neurons}_LM_{LM_neurons}_s{flags.seed}_c{flags.core_only}_con{flags.connected_selection}_n_input_{flags.n_input}_interarea_weight_distribution_{flags.interarea_weight_distribution}_E4_weight_factor_{flags.E4_weight_factor}_disconnect_LM_L6_inhibition_{flags.disconnect_LM_L6_inhibition}'
+    if flag_str is None:
+        flag_str = f'V1_{V1_neurons}_LM_{LM_neurons}_s{flags.seed}_c{flags.core_only}_con{flags.connected_selection}_n_input_{flags.n_input}_interarea_weight_distribution_{flags.interarea_weight_distribution}_E4_weight_factor_{flags.E4_weight_factor}_disconnect_V1_LM_L6_excitatory_projections_{flags.disconnect_V1_LM_L6_excitatory_projections}'
+    
     file_dir = os.path.split(__file__)[0]
-    cache_path = os.path.join(
-        file_dir, f'.cache/LM_V1_network_{flag_str}.pkl')
+    cache_path = os.path.join(file_dir, f'.cache/LM_V1_network_{flag_str}.pkl')
+    print(f"> Looking for cached LM/V1 model in {cache_path}")
 
-    # os.remove(cache_path)
     if os.path.exists(cache_path):
         try:
             with open(cache_path, 'rb') as f:

@@ -244,7 +244,7 @@ def load_simulation_results_hdf5(full_data_path, n_simulations=None, skip_first_
         flags_dict.update(dataset.attrs)
         # Get the simulation features
         if n_simulations is None:
-            n_simulations = dataset['Data']['V1']['z'].shape[0]
+            n_simulations = dataset['V1']['z'].shape[0]
         first_simulation = 0
         last_simulation = n_simulations
         if skip_first_simulation:

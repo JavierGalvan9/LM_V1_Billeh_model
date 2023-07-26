@@ -91,8 +91,9 @@ class InputActivityFigure:
 
         self.figure.savefig(os.path.join(
             self.images_dir, self.filename), dpi=300, transparent=True)
-
-        return self.figure
+        
+        plt.close(self.figure)
+        # return self.figure
 
 
 def pop_ordering(x):
@@ -472,6 +473,7 @@ class LGN_sample_plot:
             os.makedirs(path, exist_ok=True)
             fig.savefig(os.path.join(
                 path, f'LGN unit idx_{neuron_idx}.png'), dpi=300)
+            plt.close(fig)
 
 
 class PopulationActivity:
@@ -675,6 +677,7 @@ class PopulationActivity:
         # fig.tight_layout()
         fig.savefig(os.path.join(
             path, 'subplot_population_activity.png'), dpi=300)
+        plt.close(fig)
 
 
 class Saleem_Fig1:
