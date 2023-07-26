@@ -3,6 +3,7 @@ Error
 Out
 GLIF_network
 Simulation_results
+Metrics_analysis
 load_sparse_profiling.ipynb
 pruebas.ipynb
 *__pycache__*
