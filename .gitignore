@@ -9,4 +9,5 @@ pruebas.ipynb
 *__pycache__*
 .ipynb_checkpoint*
 Model_utils/.cache
-Model_utils/load_sparse_copy.py
+Model_utils/Other
+lgn_model/data

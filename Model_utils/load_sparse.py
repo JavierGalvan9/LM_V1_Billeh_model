@@ -1,83 +1,37 @@
 import os
 import h5py
 import numpy as np
-from numba import njit
-from scipy.stats import levy_stable
 import pandas as pd
 import pickle as pkl
 import json
-import logging
 import tensorflow as tf
+from Model_utils.network_builder import build_network_dat, build_input_dat, sort_indices, sort_indices_tf
+from Model_utils.interarea_connectivity_builder import InterareaConnectivity
 from time import time
 
 np.random.seed(0)
 
 
-@njit
-def sort_indices(indices, weights, delays):
-    max_ind = np.max(indices) + 1
-    # sort indices by considering first all the targets of source node 0, then all of node 1, ...
-    q = indices[:, 0] * max_ind + indices[:, 1]
-    sorted_ind = np.argsort(q)
-    return indices[sorted_ind], weights[sorted_ind], delays[sorted_ind]
-
-
-@njit
-def intersomatic_distance(sources_projected_x, targets_x, sources_projected_z, targets_z):
-    return np.sqrt((sources_projected_x - targets_x)**2 + (sources_projected_z - targets_z)**2)
-
-
-@njit
-def gaussian_decay(r, a, sigma):
-    return a*np.exp(-(r/sigma)**2)
-
-
-@njit
-def cart2pol(x, y):
-    rho = np.sqrt(x**2 + y**2)
-    phi = np.arctan2(y, x)
-    return (rho, phi)
-
-
-@njit
-def pol2cart(rho, phi):
-    x = rho * np.cos(phi)
-    y = rho * np.sin(phi)
-    return (x, y)
-
-
-def direction_tuning_factor(src_tuning, tar_tuning, sigma):
-    delta_tuning_180 = np.abs(
-        np.abs(np.mod(np.abs(tar_tuning - src_tuning), 360.0) - 180.0) - 180.0)
-    w_multiplier_180 = np.exp(-(delta_tuning_180 / sigma) ** 2)
-    return w_multiplier_180
-
-
-def node_type_id_to_pop_name(data_dir='GLIF_network'):
-    path_to_csv = os.path.join(data_dir, 'network/V1_node_types.csv')
-    path_to_h5 = os.path.join(data_dir, 'network/V1_nodes.h5')
-    node_types = pd.read_csv(path_to_csv, sep=' ')
-    node_h5 = h5py.File(path_to_h5, mode='r')
-    node_type_id_to_pop_name_dict = dict()
-    for nid in np.unique(node_h5['nodes']['v1']['node_type_id']):
-        # if not np.unique all of the 230924 model neurons ids are considered,
-        # but nearly all of them are repeated since there are only 111 different indices
-        ind_list = np.where(node_types.node_type_id == nid)[0]
-        assert len(ind_list) == 1
-        node_type_id_to_pop_name_dict[nid] = node_types.pop_name[ind_list[0]]
-
-    return node_type_id_to_pop_name_dict
-
-
-def load_network(path,
-                 h5_path,
-                 n_neurons=None, seed=3000, 
-                 core_only=True, connected_selection=False,
-                 column_name=''):
+def load_network(path="GLIF_network/v1_network_dat.pkl",
+                 h5_path="GLIF_network/network/v1_nodes.h5",
+                 core_only=True,
+                 n_neurons=51978, 
+                 seed=3000, 
+                 connected_selection=False,
+                 column_name='v1',
+                 tensorflow_speed_up=False):
+    
     rd = np.random.RandomState(seed=seed)
 
-    with open(path, 'rb') as f:
-        d = pkl.load(f)  # d is a dictionary with 'nodes' and 'edges' keys
+    # Create / Load the network_dat pickle file from the SONATA files
+    if not os.path.exists(path):
+        print(f"Creating {column_name}_network_dat.pkl file...")
+        d = build_network_dat(data_dir='GLIF_network', source=column_name, target=column_name)
+    else:
+        print(f"Loading {column_name}_network_dat.pkl file...")
+        with open(path, "rb") as f:
+            d = pkl.load(f)  # d is a dictionary with 'nodes' and 'edges' keys
+
 
   # This file contains the data related to each neuron class.
   # The nodes key is a list of 111 entries (one per neuron class) with the following information:
@@ -104,147 +58,151 @@ def load_network(path,
   #                              3.33087865e-34, 1.26318969e-03, 1.20919572e-01])}
 
     n_nodes = sum([len(a['ids']) for a in d['nodes']])  # 230924 total neurons
-    n_edges = sum([len(a['source']) for a in d['edges']])  # 70139111 total edges
-    # max_delay = max([a['params']['delay'] for a in d['edges']])
+    # Create arrays to convert between bmtk and tf ides
+    tf_id_to_bmtk_id = np.arange(n_nodes, dtype=np.int32)
+    bmtk_id_to_tf_id = np.full(n_nodes, -1, dtype=np.int32)
 
-    bmtk_id_to_tf_id = np.arange(n_nodes)
-    tf_id_to_bmtk_id = np.arange(n_nodes)
+    # Extract from the SONATA file the nodes information
+    # h5_file = h5py.File(h5_path, "r")
+    with h5py.File(h5_path, "r") as h5_file:
+        assert np.diff(h5_file["nodes"]["v1"]["node_id"]).var() < 1e-12
+        x, y, z = [h5_file["nodes"]['v1']["0"][dim][:].astype(np.float32) for dim in ["x", "y", "z"]]
+        tuning_angle = h5_file['nodes']['v1']['0']['tuning_angle'][()].astype(np.float32)
+        node_type_id = h5_file['nodes']['v1']['node_type_id'][()].astype(np.int32)
+        r = np.sqrt(x**2 + z**2)  # the maximum radius is 845
 
-    edges = d['edges']
-    h5_file = h5py.File(h5_path, 'r')
-    # This file gives us the:
-    # '0': coordinates of each point and tuning angle
-    # 'node_group_id': all nodes have the index 0
-    # 'node_group_index': same as node_id
-    # 'node_id': bmtk index of each node (node_id[0]=0, node_id[1]=1, ...)
-    # 'node_type_id': 518290966, 539742766,... for each node
-    assert np.diff(h5_file['nodes']['v1']['node_id']).var() < 1e-12
-    x = np.array(h5_file['nodes']['v1']['0']['x'])
-    y = np.array(h5_file['nodes']['v1']['0']['y'])
-    z = np.array(h5_file['nodes']['v1']['0']['z'])
-    tuning_angle = np.array(h5_file['nodes']['v1']['0']['tuning_angle'])
-    node_type_id = np.array(h5_file['nodes']['v1']['node_type_id'])
-    # its a cylinder where the y variable is just the depth
-    r = np.sqrt(x ** 2 + z ** 2)
-
+    ### CHOOSE THE NETWORK NODES ###
+    if n_neurons > 230924:
+        raise ValueError("There are only 230924 neurons in the network")
+    
     # sel is a boolean array with True value in the indices of selected neurons
-    if connected_selection:  # this condition takes the n_neurons closest neurons
+    elif connected_selection:  # this condition takes the n_neurons closest neurons
         # order according to radius distance. This option allows for more synapses since close neurons are more probably connected
         sorted_ind = np.argsort(r)
-        sel = np.zeros(n_nodes, np.bool_)
+        sel = np.zeros(n_nodes, dtype=np.bool_)
         sel[sorted_ind[:n_neurons]] = True  # keep only the nearest n_neurons
         print(f'> Maximum sample radius: {r[sorted_ind[n_neurons - 1]]:.2f}')
     # this condition makes all the neurons to be within a given distance from the origin (core)
     elif core_only:
-        # 51,978 maximum value for n_neurons in V1 in this case
-        if column_name == 'V1':
+        # 51,978 maximum value for n_neurons in v1 in this case
+        if column_name == 'v1':
             core_radius = 400
-        elif column_name == 'LM':
-            V1_to_LM_neurons_ratio = 7.010391285652859
-            core_radius = 400/np.sqrt(V1_to_LM_neurons_ratio)
+        elif column_name == 'lm':
+            v1_to_lm_neurons_ratio = 7.010391285652859 # based on BlueBrain Project data
+            core_radius = 400/np.sqrt(v1_to_lm_neurons_ratio)
         else:
             raise ValueError('Column name not recognized')
 
         sel = r < core_radius
-        if n_neurons is not None and n_neurons > 0:
-            inds, = np.where(sel)  # indices where the condition is satisfied
+        if n_neurons > 51978:
+            raise ValueError("There are only 51978 neurons in the network core")
+        
+        elif n_neurons > 0 and n_neurons <= 51978:
+            (inds,) = np.where(sel)  # indices where the condition is satisfied
             take_inds = rd.choice(inds, size=n_neurons, replace=False)
             sel[:] = False
             sel[take_inds] = True
 
     # Choose n_neurons random neurons without any other requirement
-    elif n_neurons is not None and n_neurons > 0:  # this condition takes random neurons from all the V1
+    elif n_neurons > 0 and n_neurons <= 230924:  # this condition takes random neurons from all the v1
         legit_neurons = np.arange(n_nodes)
         take_inds = rd.choice(legit_neurons, size=n_neurons, replace=False)
-        sel = np.zeros(n_nodes, np.bool_)
+        sel = np.empty(n_nodes, dtype=np.bool_)
         sel[take_inds] = True
 
     else:  # this condition takes all the neurons
-        sel = np.ones(n_nodes, np.bool_)
+        sel = np.ones(n_nodes, dtype=np.bool_)
 
+    # Get the number of neurons in the chosen network and update the traslation arrays
     n_nodes = np.sum(sel)  # number of nodes selected
+    print(f"> Number of Neurons: {n_nodes}")
     # tf idx '0' corresponds to 'tf_id_to_bmtk_id[0]' bmtk idx
     tf_id_to_bmtk_id = tf_id_to_bmtk_id[sel]
-    bmtk_id_to_tf_id = np.zeros_like(bmtk_id_to_tf_id) - 1
-    for tf_id, bmtk_id in enumerate(tf_id_to_bmtk_id):
-        bmtk_id_to_tf_id[bmtk_id] = tf_id
-
+    bmtk_id_to_tf_id[tf_id_to_bmtk_id] = np.arange(n_nodes, dtype=np.int32) 
     # bmtk idx '0' corresponds to 'bmtk_id_to_tf_id[0]' tf idx which can be '-1' in case
     # the bmtk node is not in the tensorflow selection or another value in case it belongs the selection
+    
+    # Get the properties from the network neurons
     x = x[sel]
     y = y[sel]
     z = z[sel]
     tuning_angle = tuning_angle[sel]
     node_type_id = node_type_id[sel]
 
-    # from all the model edges, lets see how many correspond to the selected nodes
-    n_edges = 0
-    for edge in edges:
-        target_tf_ids = bmtk_id_to_tf_id[np.array(edge['target'])]
-        source_tf_ids = bmtk_id_to_tf_id[np.array(edge['source'])]
-        edge_exists = np.logical_and(target_tf_ids >= 0, source_tf_ids >= 0)
-        n_edges += np.sum(edge_exists)
-
-    print(f'> Number of Neurons: {n_nodes}')
-    print(f'> Number of Synapses: {n_edges}\n')
-
-    # Save in a dictionary the properties of each of the 111 node types
-    n_node_types = len(d['nodes'])
+    # GET THE NODES PARAMETERS
+    n_node_types = len(d["nodes"])
     node_params = dict(
-        V_th=np.zeros(n_node_types, np.float32),
-        g=np.zeros(n_node_types, np.float32),
-        E_L=np.zeros(n_node_types, np.float32),
-        k=np.zeros((n_node_types, 2), np.float32),
-        C_m=np.zeros(n_node_types, np.float32),
-        V_reset=np.zeros(n_node_types, np.float32),
-        tau_syn=np.zeros((n_node_types, 4), np.float32),
-        t_ref=np.zeros(n_node_types, np.float32),
-        asc_amps=np.zeros((n_node_types, 2), np.float32)
+        V_th=np.empty(n_node_types, np.float32),
+        g=np.empty(n_node_types, np.float32),
+        E_L=np.empty(n_node_types, np.float32),
+        k=np.empty((n_node_types, 2), np.float32),
+        C_m=np.empty(n_node_types, np.float32),
+        V_reset=np.empty(n_node_types, np.float32),
+        t_ref=np.empty(n_node_types, np.float32),
+        asc_amps=np.empty((n_node_types, 2), np.float32),
     )
 
-    # give every selected node of a given node type an index according to tf ids
-    node_type_ids = np.zeros(n_nodes, np.int64)
-    for i, node_type in enumerate(d['nodes']):
+    node_type_ids = np.empty(n_nodes, np.int32)
+    for i, node_type in enumerate(d["nodes"]):
         # get ALL the nodes of the given node type
-        tf_ids = bmtk_id_to_tf_id[np.array(node_type['ids'])]
+        tf_ids = bmtk_id_to_tf_id[np.array(node_type["ids"], dtype=np.int32)]
         # choose only those that belong to our model
         tf_ids = tf_ids[tf_ids >= 0]
         # assign them all the same id (which does not relate with the neuron type)
         node_type_ids[tf_ids] = i
         for k, v in node_params.items():
             # save in a dict the information of the nodes
-            v[i] = node_type['params'][k]
+            v[i] = node_type["params"][k]
 
+    # GET THE EDGES INFORMATION
+    t0 = time()
+    edges = d["edges"]
+    n_edges = 0
+    dense_shape = (n_nodes, n_nodes)
     # each node has 4 different inputs (soma, dendrites, etc) with different properties each
-    dense_shape = (4 * n_nodes, n_nodes)
-    indices = np.zeros((n_edges, 2), dtype=np.int64)
-    weights = np.zeros(n_edges, np.float32)
-    delays = np.zeros(n_edges, np.float32)
-
-    current_edge = 0
+    # dense_shape = (4 * n_nodes, n_nodes)
+    indices = []
+    weights = []
+    delays = []
+    receptor_ids = [] # [0,1,2,3] possible values
+    
     for edge in edges:
-        # Indentify the which of the 4 types of inputs we have
-        r = edge['params']['receptor_type'] - 1
-        # r takes values whithin 0 - 3
-        target_tf_ids = bmtk_id_to_tf_id[np.array(edge['target'])]
-        source_tf_ids = bmtk_id_to_tf_id[np.array(edge['source'])]
-        edge_exists = np.logical_and(target_tf_ids >= 0, source_tf_ids >= 0)
+        target_tf_ids = bmtk_id_to_tf_id[edge["target"]]
+        source_tf_ids = bmtk_id_to_tf_id[edge["source"]]
+        edge_exists = np.logical_and(target_tf_ids != -1, source_tf_ids != -1)
         # select the edges within our model
         target_tf_ids = target_tf_ids[edge_exists]
         source_tf_ids = source_tf_ids[edge_exists]
-        weights_tf = edge['params']['weight'][edge_exists]
-        # all the edges of a given type have the same delay
-        delays_tf = edge['params']['delay']
-        n_new_edge = np.sum(edge_exists)
-        indices[current_edge:current_edge + n_new_edge] = np.array([target_tf_ids * 4 + r, source_tf_ids]).T
-        # we multiply by 4 and add r to identify the receptor_type easily:
-        # if target id is divisible by 4 the receptor_type is 0,
-        # if it is rest is 1 by dividing by 4 then its receptor type is 1, and so on...
-        weights[current_edge:current_edge + n_new_edge] = weights_tf
-        delays[current_edge:current_edge + n_new_edge] = delays_tf
-        current_edge += n_new_edge
+        weights_tf = edge["params"]["weight"][edge_exists]
+
+        n_new_edge = len(target_tf_ids)
+        n_edges += int(n_new_edge)
+        # Identify which of the 4 types of receptor types we have. r takes values within 0 - 3
+        r = edge["params"]["receptor_type"] - 1
+        # indices[current_edge:current_edge + n_new_edge] = np.array([target_tf_ids * 4 + r, source_tf_ids]).T
+
+        # all the edges of a given type have the same delay and synaptic id
+        delays_tf = np.full(n_new_edge, edge["params"]["delay"], dtype=np.float16)
+        receptor_id = np.full(n_new_edge, r, dtype=np.uint8)
+
+        indices.append(np.array([target_tf_ids, source_tf_ids]).T)
+        weights.append(weights_tf)
+        delays.append(delays_tf)
+        receptor_ids.append(receptor_id)
+
+    print(f'> Number of Synapses: {n_edges}')
+    indices = np.concatenate(indices, axis=0, dtype=np.int32)
+    weights = np.concatenate(weights, axis=0, dtype=np.float32)
+    delays = np.concatenate(delays, axis=0, dtype=np.float16)
+    receptor_ids = np.concatenate(receptor_ids, axis=0, dtype=np.uint8)
+
     # sort indices by considering first all the targets of node 0, then all of node 1, ...
-    indices, weights, delays = sort_indices(indices, weights, delays)
+    if tensorflow_speed_up:
+        # indices, weights, delays = sort_indices_tf(indices, weights, delays)
+        indices, weights, delays, receptor_ids = sort_indices_tf(indices, weights, delays, receptor_ids)
+    else:
+        # indices, weights, delays = sort_indices(indices, weights, delays)
+        indices, weights, delays, receptor_ids = sort_indices(indices, weights, delays, receptor_ids)
 
     network = dict(
         x=x, y=y, z=z,
@@ -254,7 +212,8 @@ def load_network(path,
         n_edges=n_edges,
         node_params=node_params,
         node_type_ids=node_type_ids,
-        synapses=dict(indices=indices, weights=weights, delays=delays,
+        synapses=dict(indices=indices, weights=weights, delays=delays, 
+                      receptor_ids=receptor_ids,
                       dense_shape=dense_shape),
         tf_id_to_bmtk_id=tf_id_to_bmtk_id,
         bmtk_id_to_tf_id=bmtk_id_to_tf_id,
@@ -262,162 +221,36 @@ def load_network(path,
 
     return network
 
-# Here we load the 17400 neurons that act as input in the model
-def load_input(path,
-               start=0,
-               duration=3000,
-               dt=1,
-               bmtk_id_to_tf_id=None):
-    with open(path, 'rb') as f:
-        # d contains two populations (LGN and background inputs), each of them with two elements:
-        d = pkl.load(f)
-        # [0] a dict with 'ids' and 'spikes'
-        # [1] a list of edges types, each of them with their 'source', 'target' and 'params'
-        # The first population (LGN) has 86 different edges and the source ids go from 0 to 17399
-        # The second population (background) is only formed by the source index 0 (single background node)
-        # and projects to all network neurons with 21 different edges types and weights
 
-    input_populations = []
-    for input_population in d:
-        post_indices = []
-        pre_indices = []
-        weights = []
-        delays = []
+def set_laminar_indices(network, column_name='v1', data_dir='GLIF_network'):
+    df = pd.read_csv(os.path.join(data_dir, f'network/{column_name}_node_types.csv'), delimiter=' ')
 
-        for edge in input_population[1]:
-            # Indentify the which of the 4 types of inputs we have
-            r = edge['params']['receptor_type'] - 1
-            # r takes values whithin 0 - 3
-            target_bmtk_id = np.array(edge['target'])
-            source_tf_id = np.array(edge['source'])
-            weights_tf = np.array(edge['params']['weight'])
-            delays_tf = np.zeros_like(weights_tf) + edge['params']['delay']
-            # if bmtk_id_to_tf_id is not None:
-            # check if the given edges exist in our model
-            # (notice that only the target must exist since the source is within the LGN module)
-            # This means that source index is within 0-17400
-            target_tf_id = bmtk_id_to_tf_id[target_bmtk_id]
-            edge_exists = target_tf_id >= 0
-            target_tf_id = target_tf_id[edge_exists]
-            source_tf_id = source_tf_id[edge_exists]
-            weights_tf = weights_tf[edge_exists]
-            delays_tf = delays_tf[edge_exists]
-            # we multiply by 4 the indices and add r to identify the receptor_type easily:
-            # if target id is divisible by 4 the receptor_type is 0,
-            # if it is rest is 1 by dividing by 4 then its receptor type is 1, and so on...
-            # extend acts by extending the list with the given object
-            post_indices.extend(4 * target_tf_id + r)
-            pre_indices.extend(source_tf_id)
-            weights.extend(weights_tf)
-            delays.append(delays_tf)
-        # first column are the post indices and second column the pre indices
-        indices = np.stack([post_indices, pre_indices], -1)
-        weights = np.array(weights)
-        delays = np.concatenate(delays)
-        # sort indices by considering first all the sources of target node 0, then all of node 1, ...
-        indices, weights, delays = sort_indices(indices, weights, delays)
-
-        n_input_neurons = len(input_population[0]['ids'])  # 17400
-        spikes = np.zeros((int(duration / dt), n_input_neurons))
-        
-        # now we save the spikes of the input population from the BMTK simulation
-        for i, sp in zip(input_population[0]['ids'], input_population[0]['spikes']):
-            # consider only the spikes within the period we are taking
-            sp = sp[np.logical_and(start < sp, sp < start + duration)] - start
-            sp = (sp / dt).astype(np.int)
-            for s in sp:
-                spikes[s, i] += 1
-
-        input_populations.append(dict(n_inputs=n_input_neurons, indices=indices.astype(
-            np.int64), weights=weights, delays=delays, spikes=spikes))
-    return input_populations
-
-
-def reduce_input_population(input_population, new_n_input, seed=3000):
-    rd = np.random.RandomState(seed=seed)
-
-    in_ind = input_population['indices']
-    in_weights = input_population['weights']
-    in_delays = input_population['delays']
-
-    # we take input_population['n_inputs'] neurons from a list of new_n_input with replace,
-    # which means that repeated LGN neurons double their synaptic weights, ending with less
-    # units than new_n_input
-    assignment = rd.choice(np.arange(new_n_input),
-                           size=input_population['n_inputs'], replace=True)
-
-    weight_dict = dict()
-    delays_dict = dict()
-    # go through all the asignment selection made
-    for input_neuron in range(input_population['n_inputs']):
-        assigned_neuron = assignment[input_neuron]
-        # consider neurons connected to the input_neuron
-        sel = in_ind[:, 1] == input_neuron
-        # keep that neurons connected to the input_neuron
-        sel_post_inds = in_ind[sel, 0]
-        sel_weights = in_weights[sel]
-        sel_delays = in_delays[sel]
-        for post_ind, weight, delay in zip(sel_post_inds, sel_weights, sel_delays):
-            # for post_ind, weight in zip(sel_post_inds, sel_weights):
-            # tuple with the indices of the post model neuron and the pre LGN neuron
-            t_inds = post_ind, assigned_neuron
-            if t_inds not in weight_dict.keys():  # in case the key hasnt been already created
-                weight_dict[t_inds] = 0.
-            # in case a LGN unit connection is repeated we consider that the weights are add up
-            weight_dict[t_inds] += weight
-            delays_dict[t_inds] = delay
-    n_synapses = len(weight_dict)
-    # we now save the synapses in arrays of indices and weights
-    new_in_ind = np.zeros((n_synapses, 2), np.int64)
-    new_in_weights = np.zeros(n_synapses)
-    new_in_delays = np.zeros(n_synapses)
-    for i, (t_ind, w) in enumerate(weight_dict.items()):
-        new_in_ind[i] = t_ind
-        new_in_weights[i] = w
-        new_in_delays[i] = delays_dict[t_ind]
-    new_in_ind, new_in_weights, new_in_delays = sort_indices(
-        new_in_ind, new_in_weights, new_in_delays)
-    # new_in_ind, new_in_weights = sort_indices(new_in_ind, new_in_weights)
-    new_input_population = dict(
-        n_inputs=new_n_input, indices=new_in_ind, weights=new_in_weights, delays=new_in_delays, spikes=None)
-    # new_input_population = dict(
-    # n_inputs=new_n_input, indices=new_in_ind, weights=new_in_weights, spikes=None)
-    return new_input_population
-
-
-def set_laminar_indices(df, network, flags=None):
     def get_one_layer_indices(EI, layer_number, neuron_subpop=None):
-        types_indices = []
-        for idx, node_type in df.iterrows():
-            if EI == 'e':
-                if node_type['pop_name'].startswith(f'e{layer_number}'):
-                    types_indices.append(node_type['node_type_id'])
-                else:
-                    continue
-            elif EI == 'i':
-                if (node_type['pop_name'].startswith(f'i{layer_number}')) & (neuron_subpop in node_type['pop_name']):
-                    types_indices.append(node_type['node_type_id'])
-                else:
-                    continue
-            else:
-                print('Error: Wrong population name')
-                break
+        # Pre-filter based on EI to reduce dataframe size early on
+        if EI == 'e':
+            filtered_df = df[df['pop_name'].str.startswith(f'e{layer_number}')]
+            types_indices = filtered_df['node_type_id'].values
+        elif EI == 'i':
+            # Include the subpopulation in the filter condition
+            condition = df['pop_name'].str.startswith(f'i{layer_number}') & df['pop_name'].str.contains(neuron_subpop, na=False)
+            filtered_df = df[condition]
+            types_indices = filtered_df['node_type_id'].values
+        else:
+            print('Error: Wrong population name')
+            return np.array([], dtype=np.int32)
+        
+        # Vectorized operation for selecting neurons
+        neuron_sel = np.isin(network['node_type_id'], types_indices)
+        layer_indices = np.where(neuron_sel)[0].astype(np.int32)
 
-        types_indices = np.array(types_indices)
-        neuron_sel = np.zeros(network['n_nodes'], np.bool_)
-        for type_index in types_indices:
-            # is_type = network['node_type_ids'] == type_index
-            is_type = network['node_type_id'] == type_index
-            neuron_sel = np.logical_or(neuron_sel, is_type)
-        return np.where(neuron_sel)[0]
+        return layer_indices
 
     network['laminar_indices'] = dict()
     for layer_number in [1, 2, 4, 5, 6]:
         network['laminar_indices'][f'L{layer_number}_e'] = get_one_layer_indices('e', layer_number)
-
-    for neuron_subpop in ['Pvalb', 'Sst', 'Htr3a']:
-        for layer_number in [1, 2, 4, 5, 6]:
+        for neuron_subpop in ['Pvalb', 'Sst', 'Htr3a']:
             network['laminar_indices'][f'L{layer_number}_i_{neuron_subpop}'] = get_one_layer_indices('i', layer_number, neuron_subpop)
+
     # split 2 3 layers
     # vertical_coordinates_e = network['y'][network['laminar_indices']['L23e']]
     # vertical_coordinates_i = network['y'][network['laminar_indices']['L23i']]
@@ -440,476 +273,264 @@ def set_laminar_indices(df, network, flags=None):
     return network
 
 
-class InterareaConnectivity:
-    def __init__(self, target_network, source_network, target_column_name,
-                 source_column_name, interarea_weight_distribution='billeh_like', seed=42,
-                 data_dir='GLIF_network'):
-        self.target_network = target_network
-        self.source_network = source_network
-        self.target_column_name = target_column_name
-        self.source_column_name = source_column_name
-        self.interarea_weight_distribution = interarea_weight_distribution
-        self.seed = seed
-        self.data_dir = data_dir
-        self.rd = np.random.RandomState(seed=self.seed)
-
-        # Calculate the ratio between the size of the source and target columns
-        target_network_radius = np.sqrt(self.target_network['x']**2 + self.target_network['z']**2).max()
-        source_network_radius = np.sqrt(self.source_network['x']**2 + self.source_network['z']**2).max()
-        self.radius_ratio = target_network_radius/source_network_radius
-
-        # Create dictionary between node_type_id and their pop names
-        self.node_type_id_to_pop_name_dict = node_type_id_to_pop_name()
-
-        # Load the dictionary with the connection probabilities parameters
-        interarea_connectivity_path = os.path.join(
-            self.data_dir, f'{self.source_column_name}_to_{self.target_column_name}_connection_probabilities.json')
-        with open(interarea_connectivity_path, 'rb') as f:
-            self.interarea_connectivity = json.load(f)
-
-        # Load the CSV with the synaptic information (weights, delays, etc.) for every neuron pair
-        edge_types_df = pd.read_csv(os.path.join(self.data_dir, 'network/v1_v1_edge_types.csv'), delimiter=' ')
-        edge_types_df['target_query'] = edge_types_df['target_query'].str.slice(start=15, stop=24)
-        edge_types_df['target_query'] = edge_types_df['target_query'].astype(np.uint32)
-        edge_types_df['source_query'] = edge_types_df['source_query'].str.slice(start=11, stop=-1)
-
-        # Create a dictionary with the parameters for every edge type
-        self.edge_params_keys = ['syn_weight', 'weight_function', 'weight_sigma', 'delay', 'dynamics_params']
-        self.edges_params = {target_query: {} for target_query in set(edge_types_df['target_query'])}
-        for index, row in edge_types_df.iterrows():
-            self.edges_params[row['target_query']][row['source_query']] = {}
-            for key in self.edge_params_keys:
-                self.edges_params[row['target_query']][row['source_query']][key] = row[key]
-
-    def compute_pair_type_parameters(self, source_type, target_type):
-        """ Takes in two strings for the source and target type. It determined the connectivity parameters needed based on
-        distance dependence and orientation tuning dependence and returns a dictionary of these parameters. A description
-        of the calculation and resulting formulas used herein can be found in the accompanying documentation. Note that the
-        source and target can be the same as this function works on cell TYPES and not individual nodes. The first step of
-        this function is getting the parameters that determine the connectivity probabilities reported in the literature.
-        From there the calculation proceed based on adapting these values to our model implementation.
-
-        :param source_type: string of the cell type that will be the source (pre-synaptic)
-        :param target_type: string of the cell type that will be the targer (post-synaptic)
-        :return: dictionary with the values to be used for distance dependent connectivity
-                 and orientation tuning dependent connectivity (when applicable, else nans populate the dictionary).
-        """
-
-        target = '_'.join(target_type.split('_')[1:])
-        source = '_'.join(source_type.split('_')[1:])
-
-        ##### For distance dependence which is modeled as a Gaussian ####
-        # P = A * exp(-r^2 / sigma^2)
-
-        # A_0 is different for every source-target pair and was estimated from the BBP model.
-        A_0 = self.interarea_connectivity[source_type][target_type]['amplitude']
-
-        # Sigma is estimated from the BBP model.
-        sigma = self.interarea_connectivity[source_type][target_type]['sigma']
-
-        # We confirmed that A_0 is lower than 1. If this does happen, it is for a few cases and is not much higher than 1.0.
-        if A_0 > 1.0:
-            logging.warning('Adjusted calculated probability based on distance dependence is coming out to be '
-                            'greater than 1 for ' + source_type + ' and ' + target_type + '. Setting to 1.0')
-            A_0 = 1.0
-
-        ##### To include orientation tuning ####
-        # Many cells will show orientation tuning and the relative different in orientation tuning angle will influence
-        # probability of connections as has been extensively report in the literature. This is modeled here with a linear
-        # where B in the largest value from 0 to 90 (if the profile decays, then B is the intercept, if the profile
-        # increases, then B is the value at 90). The value of G is the gradient of the curve.
-        # The calculations and explanation can be found in the accompanying documentation with this code.
-
-        # B_ratio takes value 0.8 for e-e5 connections, 0.5 for other e-e connections and np.nan for connections involving
-        # inhibitory neurons
-        if 'i' in source or 'i' in target:
-            B_ratio = np.nan
-        else:
-            if '5' in target:
-                B_ratio = 0.8
-            else:
-                B_ratio = 0.5
-
-        # Check if there is orientation dependence in this source-target pair type. If yes, then a parallel calculation
-        # to the one done above for distance dependence is made though with the assumption of a linear profile.
-        if not np.isnan(B_ratio):
-            # The scaling for distance and orientation must remain less than 1 which is calculated here and reset
-            # if it is greater than one. We also ensure that the area under the p(delta_phi) curve is always equal
-            # to one (see documentation). Hence the desired ratio by the user may not be possible, in which case
-            # an warning message appears indicating the new ratio used. In the worst case scenario the line will become
-            # horizontal (no orientation tuning) but will never "reverse" slopes.
-
-            # B1 is the intercept which occurs at (0, B1)
-            # B2 is the value when delta_phi equals 90 degree and hence the point (90, B2)
-            B1 = 2.0 / (1.0 + B_ratio)
-            B2 = B_ratio * B1
-
-            AB = A_0 * max(B1, B2)
-            if AB > 1.0:
-                if B1 >= B2:
-                    B1_new = 1.0 / A_0
-                    delta = B1 - B1_new
-                    B1 = B1_new
-                    B2 = B2 + delta
-                elif (B2 > B1):
-                    B2_new = 1.0 / A_0
-                    delta = B2 - B2_new
-                    B2 = B2_new
-                    B1 = B1 + delta
-
-                B_ratio = B2 / B1
-                logging.warning(
-                    'Could not satisfy the desired B_ratio, probability of connectivity would become greater than one in'
-                    'some cases. Rescaled, {} --> {} the ratio is set to {}'.format(
-                        source_type, target_type, B_ratio)
-                )
-
-            G = (B2 - B1) / 90.0
-
-        # If there is no orientation dependent, record this by setting the intercept to Not a Number (NaN).
-        else:
-            B1 = np.NaN
-            G = np.NaN
-
-        # Return the dictionary. Note, the new values are A_0 and intercept.
-        return {
-            'A_0': A_0,
-            'sigma': sigma,
-            'gradient': G,
-            'intercept': B1,
-            'nsyn_range': [3, 8]
-        }
-
-    def DirectionRule_EE(self, src_tf_ids, trg_tf_ids, src_x_projected, src_z_projected, nsyns_ret, synapsis_params):
-
-        tar_tuning = self.target_network['tuning_angle'][trg_tf_ids]
-        src_tuning = self.source_network['tuning_angle'][src_tf_ids]
-        x_tar = self.target_network['x'][trg_tf_ids]
-        z_tar = self.target_network['z'][trg_tf_ids]
-        x_src = src_x_projected
-        z_src = src_z_projected
-
-        sigma = synapsis_params['weight_sigma']
-        syn_weight = synapsis_params['syn_weight']
-
-        w_multiplier_180 = direction_tuning_factor(src_tuning, tar_tuning, sigma)
-
-        delta_x = (x_tar - x_src) * 0.07
-        delta_z = (z_tar - z_src) * 0.04
-
-        theta_pref = tar_tuning * (np.pi / 180.)
-        xz = delta_x * np.cos(theta_pref) + delta_z * np.sin(theta_pref)
-        sigma_phase = 1.0
-        phase_scale_ratio = np.exp(- (xz ** 2 / (2 * sigma_phase ** 2)))
-
-        # To account for the 0.07 vs 0.04 dimensions. This ensures the horizontal neurons are scaled by 5.5/4 (from the
-        # midpoint of 4 & 7). Also, ensures the vertical is scaled by 5.5/7. This was a basic linear estimate to get the
-        # numbers (y = ax + b).
-        theta_tar_scale = abs(abs(abs(180.0 - np.mod(np.abs(tar_tuning), 360.0)) - 90.0) - 90.0)
-        phase_scale_ratio = phase_scale_ratio * (5.5 / 4.0 - 11.0 / 1680.0 * theta_tar_scale)
-
-        return syn_weight * w_multiplier_180 * phase_scale_ratio * nsyns_ret
-
-    def DirectionRule_others(self, src_tf_ids, trg_tf_ids, nsyns_ret, synapsis_params):
-
-        tar_tuning = self.target_network['tuning_angle'][trg_tf_ids]
-        src_tuning = self.source_network['tuning_angle'][src_tf_ids]
-
-        sigma = synapsis_params['weight_sigma']
-        syn_weight = synapsis_params['syn_weight']
-
-        w_multiplier_180 = direction_tuning_factor(src_tuning, tar_tuning, sigma)
-
-        return syn_weight * w_multiplier_180 * nsyns_ret
-
-    def assign_weight_and_delay(self, source, target, source_tf_ids, target_tf_ids, nsyns_ret):
-        """This function determined which nodes are connected based on the parameters in the dictionary params. The
-        function iterates through every cell pair when called and hence no for loop is seen iterating pairwise
-        although this is still happening.
-
-        By iterating though every cell pair, a decision is made whether or not two cells are connected and this
-        information is returned by the function. This function calculates these probabilities based on the distance between
-        two nodes and (if applicable) the orientation tuning angle difference.
-
-        :param source: the pop_name of the source
-        :param target: the pop_name of the target
-        :param source_network: the network dict of the source area
-        :param target_network: the network dict of the target area
-        :param params: parameters dictionary for probability of connection (see function: compute_pair_type_parameters)
-        :return: if two cells are deemed to be connected, the return function automatically returns the source id
-                 and the target id for that connection. The code further returns the number of synapses between
-                 those two neurons
-        """
-        tgt_query_ids = self.target_network['node_type_id'][target_tf_ids]
-        src_query_ids = self.source_network['node_type_id'][source_tf_ids]
-        src_query = [self.node_type_id_to_pop_name_dict[node_id] for node_id in src_query_ids]
-        tgt_query = [self.node_type_id_to_pop_name_dict[node_id] for node_id in tgt_query_ids]
-
-        synapsis_params = {k: [] for k in self.edge_params_keys}
-        for tgt_q, src_q in zip(tgt_query_ids, src_query):
-            edge_parameters = self.edges_params[tgt_q][src_q]
-            for k, v in edge_parameters.items():
-                synapsis_params[k].append(v)
-
-        json_to_receptor_type = {'e2i.json': 3, 'e2e.json': 1, 
-                                 'i2e.json': 2, 'i2i.json': 4}
-        receptor_types = [json_to_receptor_type.get(key) for key in synapsis_params['dynamics_params']]
-
-        if ('e' in source) and ('e' in target):
-            synaptic_weights = self.DirectionRule_EE(source_tf_ids, target_tf_ids,
-                                                     self.sources_projected_x, self.sources_projected_z,
-                                                     nsyns_ret, synapsis_params)
-        else:
-            synaptic_weights = self.DirectionRule_others(source_tf_ids, target_tf_ids,
-                                                         nsyns_ret, synapsis_params)
-
-        return synaptic_weights, synapsis_params['delay'], receptor_types
-
-    def connect_cells(self, source, target, params):
-        """This function determined which nodes are connected based on the parameters in the dictionary params. The
-        function iterates through every cell pair when called and hence no for loop is seen iterating pairwise
-        although this is still happening.
-
-        By iterating though every cell pair, a decision is made whether or not two cells are connected and this
-        information is returned by the function. This function calculates these probabilities based on the distance between
-        two nodes and (if applicable) the orientation tuning angle difference.
-
-        :param source: the pop_name of the source
-        :param target: the pop_name of the target
-        :param params: parameters dictionary for probability of connection (see function: compute_pair_type_parameters)
-        :return: if two cells are deemed to be connected, the return function automatically returns the source id
-                 and the target id for that connection. The code further returns the number of synapses between
-                 those two neurons
-        """
-        target = '_'.join(target.split('_')[1:])
-        source = '_'.join(source.split('_')[1:])
-
-        # Get the ids of all the source and target neurons of a given neuron pair type
-        target_ids = self.target_network['laminar_indices'][target]
-        source_ids = self.source_network['laminar_indices'][source]
-
-        # Get the number of neurons in every population
-        num_neuron_target = target_ids.size
-        num_neuron_source = source_ids.size
-
-        # Get the coordinates and tuning angle of every neuron for the source and target networks
-        targets_x = self.target_network['x'][target_ids]
-        targets_z = self.target_network['z'][target_ids]
-        targets_tuning_angle = self.target_network['tuning_angle'][target_ids]
-
-        sources_x = self.source_network['x'][source_ids]
-        sources_z = self.source_network['z'][source_ids]
-        sources_tuning_angle = self.source_network['tuning_angle'][source_ids]
-
-        # Project each neuron of the source area into its retinotopic location in the target area according
-        # to the cylindrical form of the column.
-        sources_r, sources_phi = cart2pol(sources_x, sources_z)
-        sources_projected_x, sources_projected_z = pol2cart(sources_r*self.radius_ratio, sources_phi)
-
-        # Replicate the sources and targets features for every possible pair
-        sources_projected_x = np.repeat(sources_projected_x, num_neuron_target).astype(np.float32)
-        sources_projected_z = np.repeat(sources_projected_z, num_neuron_target).astype(np.float32)
-        sources_tuning_angle = np.repeat(sources_tuning_angle, num_neuron_target).astype(np.float32)
-
-        targets_x = np.tile(targets_x, num_neuron_source).astype(np.float32)
-        targets_z = np.tile(targets_z, num_neuron_source).astype(np.float32)
-        targets_tuning_angle = np.tile(targets_tuning_angle, num_neuron_source).astype(np.float32)
-
-        # Read parameter values needed for distance and orientation dependence
-        A_0 = params['A_0']
-        sigma = params['sigma']
-        gradient = params['gradient']
-        intercept = params['intercept']
-        nsyn_range = params['nsyn_range']
-
-        # Calculate the planar intersomatic distance between the current two cells (in 2D - not including depth)
-        planar_intersomatic_distance = intersomatic_distance(
-            sources_projected_x, targets_x, sources_projected_z, targets_z)
-
-        # Check if there is orientation dependence
-        if not np.isnan(gradient):
-            # Calculate the difference in orientation tuning between the cells
-            delta_orientation = sources_tuning_angle - targets_tuning_angle
-
-            # For OSI, convert to quadrant from 0 - 90 degrees
-            delta_orientation = abs(abs(abs(180.0 - abs(delta_orientation)) - 90.0) - 90.0)
-
-            # Calculate the probability two cells are connected based on distance and orientation
-            p_connect = gaussian_decay(planar_intersomatic_distance, A_0, sigma)\
-                * (intercept + gradient * delta_orientation)
-
-        # If no orientation dependence
-        else:
-            # Calculate the probability two cells are connection based on distance only
-            p_connect = gaussian_decay(planar_intersomatic_distance, A_0, sigma)
-
-        # Sanity check warning
-        if np.any(p_connect) > 1:
-            raise ValueError('ERROR: p_connect > 1.0')
-
-        # Set connections
-        num_full_connections = num_neuron_target * num_neuron_source
-        all_conn_idcs = np.arange(num_full_connections, dtype=np.int32)
-
-        # Reduce the dtype of p_connect
-        p_connect = p_connect.astype(np.float16)
-
-        # Decide which cells get a connection based on the p_connect value calculated
-        p_connected = self.rd.binomial(1, p_connect)
-        connections_mask = p_connected.astype(np.bool_)
-        # synapses_mask = target_source_conn_prob > rd.uniform(low=0, high=1, size=num_full_connections)
-        n_connections = int(np.sum(connections_mask))
-
-        # Assign the number of synapses for every connection
-        nsyns_ret = np.zeros(num_full_connections, dtype=np.int32)
-        nsyns_ret[connections_mask] = self.rd.randint(
-            nsyn_range[0], nsyn_range[1], n_connections).astype(np.int32)
- 
-        # Calculate the total number of synapses
-        n_synapses = int(np.sum(nsyns_ret))
-        if n_connections != 0:
-            print(f'> {self.source_column_name}-{source} to {self.target_column_name}-{target} Number of Connections: {n_connections}')
-            print(f'{self.source_column_name}-{source} to {self.target_column_name}-{target} Number of Synapses: {n_synapses}')
-        else:
-            print(f'> {self.source_column_name}-{source} to {self.target_column_name}-{target} No Connections')
-
-        # Get the neuron indices for every connection pair
-        conn_idcs = all_conn_idcs[connections_mask]
-        self.sources_projected_x = sources_projected_x[connections_mask]
-        self.sources_projected_z = sources_projected_z[connections_mask]
-        nsyns_ret = nsyns_ret[connections_mask]
-    #     nsyns_ret = [Nsyn if Nsyn != 0 else None for Nsyn in nsyns_ret]
-
-        src_idcs = np.int32(conn_idcs / num_neuron_target)  # \in [0, n_in-1]
-        tgt_idcs = conn_idcs % num_neuron_target  # \in [0, n_out-1]
-
-        target_tf_ids = target_ids[tgt_idcs]
-        source_tf_ids = source_ids[src_idcs]
-
-        return source_tf_ids, target_tf_ids, nsyns_ret
-
-    def __call__(self):
-        target_tf_ids = []
-        source_tf_ids = []
-        interarea_weights = []
-        interarea_delays = []
-        interarea_receptor_types = []
-
-        for source in self.interarea_connectivity.keys():
-            for target in self.interarea_connectivity[source].keys():
-                t0 = time()
-                connectivity_params = self.compute_pair_type_parameters(source, target)
-                src_tf_ids, tgt_tf_ids, nsyns_ret = self.connect_cells(source, target, connectivity_params)
-
-                target_tf_ids.append(tgt_tf_ids*4)
-                source_tf_ids.append(src_tf_ids)
-
-                # Set synaptic weights and delays
-                # n_connections = len(target_tf_ids)
-                n_connections = len(tgt_tf_ids) 
-
-                if self.interarea_weight_distribution == 'levy_stable':
-                    # alpha, betas were got from fitting recurrent weights within a column
-                    random_weights = levy_stable.rvs(0.6, 0, size=n_connections*10)
-                    random_weights = random_weights[random_weights > 0]
-                elif self.interarea_weight_distribution == 'normal':
-                    # mean and std were got from fitting recurrent weights within a column
-                    random_weights = self.rd.randn(n_connections*10) + 10
-                    random_weights = random_weights[random_weights > 0]
-                elif self.interarea_weight_distribution == 'billeh_like':
-                    synaptic_weights, synaptic_delays, receptor_types = self.assign_weight_and_delay(source, target,
-                                                                                                     src_tf_ids, tgt_tf_ids,
-                                                                                                     nsyns_ret)
-                elif self.interarea_weight_distribution == 'disconnected':
-                    synaptic_weights = np.zeros(n_connections)
-                    synaptic_delays = np.ones(n_connections)  
-                    receptor_types = np.ones(n_connections)
-                else:
-                    raise ValueError('Invalid weight distribution')
-                
-                interarea_weights.append(synaptic_weights)
-                interarea_delays.append(synaptic_delays)
-                interarea_receptor_types.append(receptor_types)
- 
-                if n_connections != 0: 
-                    print(f'{source} to {target} connection time: {round(time()-t0, 2)} s.\n')
-                
-                t0 = time()
-
-        if target_tf_ids and source_tf_ids:  # if both the lists are not empty
-            # identify target receptor
-            # Indentify the which of the 4 types of inputs we have
-            r = np.concatenate(interarea_receptor_types) - 1
-            indices = np.array([np.concatenate(target_tf_ids) + r, np.concatenate(source_tf_ids)], dtype=np.int64).T
-            
-            # (all neurons in target column*n_receptors, all neurons in source column)
-            dense_shape = (self.target_network['n_nodes']*4, self.source_network['n_nodes'])
-            max_tgt_ind, max_src_ind = indices.max(axis=0)
-            # check legal indices
-            assert max_tgt_ind <= self.target_network['n_nodes'] * 4, 'wrong inter-area indices from target!'
-            assert max_src_ind <= self.source_network['n_nodes'], 'wrong inter-area indices from source!'
-            # weights
-            interarea_weights = np.concatenate(interarea_weights)
-            # delays
-            interarea_delays = np.concatenate(interarea_delays)
-
-            # rand_delays = rd.randint(low=inter_area_min_delay, high=inter_area_max_delay, size=interarea_weights.shape)
-            indices, interarea_weights, interarea_delays = sort_indices(indices, interarea_weights, interarea_delays)
-
-        else:
-            indices, interarea_weights, dense_shape, interarea_delays = None, None, None, np.ones(1)  
-            # max_delay in model.py needs a non- None type
-
-        # Create a dictionary to save the interarea connections
-        if 'interarea_synapses' not in self.target_network.keys():
-            self.target_network['interarea_synapses'] = dict()
-            if self.source_column_name not in self.target_network['interarea_synapses'].keys():
-                self.target_network['interarea_synapses'][self.source_column_name] = dict()
-
-        self.target_network['interarea_synapses'][self.source_column_name]['indices'] = indices
-        # Save the interarea synapses in the target network as arrays with float16 type
-        self.target_network['interarea_synapses'][self.source_column_name]['weights'] = interarea_weights
-        self.target_network['interarea_synapses'][self.source_column_name]['delays'] = interarea_delays
-        self.target_network['interarea_synapses'][self.source_column_name]['dense_shape'] = dense_shape
-
-        print(f'Number of connections from {self.source_column_name} to {self.target_column_name}: {len(interarea_weights)}')
-
-        return self.target_network
-
+# Here we load the 17400 neurons that act as input in the model
+def load_input(column_name='v1', 
+               source='lgn',
+               input_dat_path="GLIF_network/bkg_v1_network_dat.pkl",
+               bmtk_id_to_tf_id=None,
+               tensorflow_speed_up=False,
+            #    start=0,
+            #    duration=3000,
+            #    dt=1
+               ):
+
+    # LOAD THE BACKGROUND INPUT
+    if not os.path.exists(input_dat_path):
+        print(f"Creating {source}_{column_name}_network_dat.pkl file...")
+        # Process BKG input network
+        input_dat = build_input_dat(data_dir='GLIF_network', source=source, target=column_name)
+        print("Done.")
+    else:
+        with open(input_dat_path, "rb") as f:
+            input_dat = pkl.load(f)
+
+    # Unite the edges information of the LGN and the background noise
+    input_edges = input_dat['edges']
+    
+    post_indices = []
+    pre_indices = []
+    weights = []
+    delays = []
+    receptor_ids = []
+
+    for edge in input_edges:
+        # Indentify the which of the 4 types of inputs we have
+        r = edge['params']['receptor_type'] - 1
+        # r takes values whithin 0 - 3
+        target_bmtk_id = edge["target"].astype(np.int32)
+        source_tf_id = edge["source"].astype(np.int32)
+        weights_tf = edge["params"]["weight"].astype(np.float32)
+
+        n_new_edge = len(target_bmtk_id)
+        delays_tf = np.full(n_new_edge, edge["params"]["delay"], dtype=np.float16)
+        receptor_id = np.full(n_new_edge, r, dtype=np.uint8)
+
+        # check if the given edges exist in our model
+        # (notice that only the target must exist since the source is within the LGN module)
+        # This means that source index is within 0-17400
+        if bmtk_id_to_tf_id is not None:
+            target_tf_id = bmtk_id_to_tf_id[target_bmtk_id]
+            edge_exists = target_tf_id >= 0
+            target_tf_id = target_tf_id[edge_exists]
+            source_tf_id = source_tf_id[edge_exists]
+            weights_tf = weights_tf[edge_exists]
+            delays_tf = delays_tf[edge_exists]
+            receptor_id = receptor_id[edge_exists]
+            # we multiply by 4 the indices and add r to identify the receptor_type easily:
+            # if target id is divisible by 4 the receptor_type is 0,
+            # if it is rest is 1 by dividing by 4 then its receptor type is 1, and so on...
+            # extend acts by extending the list with the given object
+            # post_indices.extend(4 * target_tf_id + r)
+            # pre_indices.extend(source_tf_id)
+            # weights.extend(weights_tf)
+            # delays.append(delays_tf)
+            # new_target_tf_id = target_tf_id * max_n_receptors + r
+            new_target_tf_id = target_tf_id
+            post_indices.append(new_target_tf_id)
+            pre_indices.append(source_tf_id)
+            weights.append(weights_tf)
+            delays.append(delays_tf)
+            receptor_ids.append(receptor_id)
+
+
+    post_indices = np.concatenate(post_indices, axis=0, dtype=np.int32)
+    pre_indices = np.concatenate(pre_indices, axis=0, dtype=np.int32)
+    weights = np.concatenate(weights, axis=0, dtype=np.float32)
+    delays = np.concatenate(delays, axis=0, dtype=np.float16)
+    receptor_ids = np.concatenate(receptor_ids, axis=0, dtype=np.uint8)
+
+    # first column are the post indices and second column the pre indices
+    indices = np.stack([post_indices, pre_indices], -1)
+
+    # Sort indices
+    # indices, weights, delays, syn_ids = sort_indices_tf(indices, weights, delays, syn_ids)
+    if tensorflow_speed_up:
+        # indices, weights, delays = sort_indices_tf(indices, weights, delays)
+        indices, weights, delays, receptor_ids = sort_indices_tf(indices, weights, delays, receptor_ids)
+    else:
+        # indices, weights, delays = sort_indices(indices, weights, delays)
+        indices, weights, delays, receptor_ids = sort_indices(indices, weights, delays, receptor_ids)
+
+    # n_inputs = len(set(pre_indices))
+    # print('N_inputs: ', n_inputs)
+    # we load the background nodes and their positions
+    nodes_h5_file = h5py.File(f"GLIF_network/network/{source}_nodes.h5", "r")
+    n_inputs = len(nodes_h5_file["nodes"][source]["node_id"])
+
+    input_population = dict(
+                            n_inputs=n_inputs,
+                            indices=indices,
+                            weights=weights,
+                            delays=delays,
+                            receptor_ids=receptor_ids,
+        )
+
+    # n_input_neurons = len(input_population[0]['ids'])  # 17400
+    # spikes = np.zeros((int(duration / dt), n_input_neurons))
+    
+    # # now we save the spikes of the input population from the BMTK simulation
+    # for i, sp in zip(input_population[0]['ids'], input_population[0]['spikes']):
+    #     # consider only the spikes within the period we are taking
+    #     sp = sp[np.logical_and(start < sp, sp < start + duration)] - start
+    #     sp = (sp / dt).astype(np.int)
+    #     for s in sp:
+    #         spikes[s, i] += 1
+    # input_populations.append(
+    #     dict(n_inputs=n_input_neurons, indices=indices.astype(
+    #     np.int64), weights=weights, delays=delays, spikes=spikes))
+
+    return input_population
+
+def reduce_input_population(input_population, new_n_input, seed=3000):
+    # This is not optimal since we are randonmly taking and adding the effect of different LGN units, 
+    # without considering their spatial arrangement and connectivity particularities
+    rd = np.random.RandomState(seed=seed)
+
+    in_ind = input_population['indices']
+    in_weights = input_population['weights']
+    in_delays = input_population['delays']
+    in_receptor_ids = input_population["receptor_ids"]
+
+    # we take input_population['n_inputs'] neurons from a list of new_n_input with replace,
+    # which means that repeated LGN neurons double their synaptic weights, ending with less
+    # units than new_n_input
+    assignment = rd.choice(np.arange(new_n_input, dtype=np.int32), 
+                           size=input_population['n_inputs'], replace=True)
+
+    # Create a tuple of indices for vectorized operations
+    post_indices = in_ind[:, 0]
+    input_neuron_indices = in_ind[:, 1]
+    assigned_neuron_indices = assignment[input_neuron_indices]
+
+    # Calculate unique pairs and their indices in the original array
+    unique_pairs, inverse_indices = np.unique(np.stack((post_indices, assigned_neuron_indices), axis=1), axis=0, return_inverse=True)
+
+    # Accumulate weights for repeated pairs
+    accumulated_weights = np.bincount(inverse_indices, weights=in_weights)
+
+    # Lets get the average delay by the connection strength (synaptic weight), 
+    # assuming stronger connections might have a more significant impact on the timing.
+    # Calculate mean delays for each unique pair
+    # First, accumulate the total delays for each unique pair
+    total_delays = np.bincount(inverse_indices, weights=in_delays)
+    # Count the occurrences of each unique pair to divide and get the mean
+    counts = np.bincount(inverse_indices)
+    # Calculate the mean by dividing total delays by counts
+    mean_delays = total_delays / counts
+
+    # same for the receptor_ids since all of them are excitatory
+    total_receptor_ids = np.bincount(inverse_indices, weights=in_receptor_ids)
+    mean_receptor_ids = total_receptor_ids // counts
+
+    # Sort the data
+    new_in_ind, new_in_weights, new_in_delays, new_in_receptor_ids = sort_indices(
+        unique_pairs, accumulated_weights, mean_delays, mean_receptor_ids)
+
+    new_input_population = {
+        'n_inputs': new_n_input,
+        'indices': new_in_ind.astype(np.int32),
+        'weights': new_in_weights.astype(np.float32),
+        'delays': new_in_delays.astype(np.float16),
+        'receptor_ids': new_in_receptor_ids.astype(np.uint8),
+        'spikes': None
+    }
+
+    return new_input_population
 
 def load_billeh(flags, n_neurons):
 
     networks = dict()
-    bkg_weights = dict()
+    lgn_inputs = dict()
+    bkg_inputs = dict()
+    # inputs = dict()
+    # bkg_weights = dict()
 
     # initialize every area
-    for column_name in ['V1', 'LM']:
-        df = pd.read_csv(os.path.join(
-            flags.data_dir, f'network/{column_name}_node_types.csv'), delimiter=' ')
+    for column_name in ['v1', 'lm']:
 
         print(f'{column_name} column')
         networks[column_name] = load_network(
-            path=os.path.join(flags.data_dir, f'{column_name}_network_dat.pkl'),
-            h5_path=os.path.join(flags.data_dir, f'network/{column_name}_nodes.h5'), 
-            core_only=flags.core_only, n_neurons=n_neurons[column_name],
-            seed=flags.seed, connected_selection=flags.connected_selection,
-            column_name=column_name)
-        networks[column_name] = set_laminar_indices(df, networks[column_name])
+                                            path=os.path.join(flags.data_dir, f'{column_name}_network_dat.pkl'),
+                                            h5_path=os.path.join(flags.data_dir, f'network/{column_name}_nodes.h5'), 
+                                            core_only=flags.core_only, 
+                                            n_neurons=n_neurons[column_name],
+                                            seed=flags.seed, 
+                                            connected_selection=flags.connected_selection,
+                                            column_name=column_name,
+                                            tensorflow_speed_up=False)
+        networks[column_name] = set_laminar_indices(networks[column_name], column_name=column_name, data_dir = flags.data_dir)
 
-        inputs = load_input(
-            start=1000, duration=1000, dt=1, path=os.path.join(flags.data_dir, 'input_dat.pkl'),
-            bmtk_id_to_tf_id=networks[column_name]['bmtk_id_to_tf_id'])
+        ###### Select random l5e neurons for tracking output #########
+        # df = pd.read_csv(os.path.join(
+        #     flags.data_dir, "network/v1_node_types.csv"), delimiter=" ")
+        
+        # l5e_types_indices = []
+        # for a in df.iterrows():
+        #     if a[1]["pop_name"].startswith("e5"):
+        #         l5e_types_indices.append(a[0])
+        # l5e_types_indices = np.array(l5e_types_indices)
+        # l5e_neuron_sel = np.zeros(network["n_nodes"], np.bool_)
+        # for l5e_type_index in l5e_types_indices:
+        #     is_l5_type = network["node_type_ids"] == l5e_type_index
+        #     l5e_neuron_sel = np.logical_or(l5e_neuron_sel, is_l5_type)
+        # network["l5e_types"] = l5e_types_indices
+        # network["l5e_neuron_sel"] = l5e_neuron_sel
+        # print(f"> Number of L5e Neurons: {np.sum(l5e_neuron_sel)}")
 
-        if column_name == 'V1':
-            input_population = inputs[0]  # LGN input direct to V1
+        # # assert that you have enough l5 neurons for all the outputs and then choose n_output * neurons_per_output random neurons
+        # # assert np.sum(l5e_neuron_sel) > n_output * neurons_per_output
+        # rd = np.random.RandomState(seed=flags.seed)
+        # l5e_neuron_indices = np.where(l5e_neuron_sel)[0]
+        # readout_neurons = rd.choice(
+        #     l5e_neuron_indices, size=flags.n_output * flags.neurons_per_output, replace=False
+        # )
+        # readout_neurons = readout_neurons.reshape((flags.n_output, flags.neurons_per_output))
+        # network["readout_neuron_ids"] = readout_neurons
+        # #########################################
 
-        # contains the single background node that projects to all V1 neurons
-        bkg = inputs[1]
-        bkg_weights[column_name] = np.zeros((networks[column_name]['n_nodes'] * 4,), np.float32)
-        bkg_weights[column_name][bkg['indices'][:, 0]] = bkg['weights']
+        if column_name == 'v1':
+            lgn_input = load_input(
+                                    column_name=column_name, 
+                                    source='lgn',
+                                    input_dat_path=os.path.join(flags.data_dir, f"lgn_{column_name}_network_dat.pkl"),
+                                    bmtk_id_to_tf_id=networks[column_name]['bmtk_id_to_tf_id'],
+                                    tensorflow_speed_up=False)
+            if flags.n_input != 17400:
+                lgn_inputs[column_name] = reduce_input_population(lgn_input, flags.n_input, seed=flags.seed)
+            else:
+                lgn_inputs[column_name] = lgn_input
 
-    for target_column_name in ['V1', 'LM']:
-        for source_column_name in ['V1', 'LM']:
+        else:
+            lgn_inputs[column_name] = None
+
+        
+        bkg_input = load_input(
+                                column_name=column_name, 
+                                source='bkg',
+                                input_dat_path=os.path.join(flags.data_dir, f"bkg_{column_name}_network_dat.pkl"),
+                                bmtk_id_to_tf_id=networks[column_name]['bmtk_id_to_tf_id'],
+                                tensorflow_speed_up=False)
+
+        bkg_inputs[column_name] = bkg_input
+
+
+        # # contains the single background node that projects to all v1 neurons
+        # bkg = inputs[1]
+        # bkg_weights[column_name] = np.zeros((networks[column_name]['n_nodes'] * 4,), np.float32)
+        # bkg_weights[column_name][bkg['indices'][:, 0]] = bkg['weights']
+
+    for target_column_name in ['v1', 'lm']:
+        for source_column_name in ['v1', 'lm']:
             if target_column_name != source_column_name:                
                 source_target_connectivity = InterareaConnectivity(networks[target_column_name], networks[source_column_name],
                                                                    target_column_name, source_column_name,
@@ -919,78 +540,76 @@ def load_billeh(flags, n_neurons):
 
     if flags.E4_weight_factor != 1:
         print('E4_weight_factor = ', flags.E4_weight_factor)
-        L4_e_ids = networks['LM']['laminar_indices']['L4_e']
+        L4_e_ids = networks['lm']['laminar_indices']['L4_e']
 
-        ### Increase recurrent weights to E4 in LM 
-        # rec_target_indices = networks['LM']['synapses']['indices'] [:, 0] // 4
-        # # Get the recurrent excitatory projections to LM e4 neurons
-        # L4_e_rec_exc_edges_mask =  np.logical_and(np.isin(rec_target_indices, L4_e_ids), networks['LM']['synapses']['weights'] > 0)
-        # # Increase the weight of the excitatory recurrent projections to LM e4 neurons
-        # networks['LM']['synapses']['weights'][L4_e_rec_exc_edges_mask] *= flags.E4_weight_factor
+        ### Increase recurrent weights to E4 in lm 
+        # rec_target_indices = networks['lm']['synapses']['indices'] [:, 0] // 4
+        # # Get the recurrent excitatory projections to lm e4 neurons
+        # L4_e_rec_exc_edges_mask =  np.logical_and(np.isin(rec_target_indices, L4_e_ids), networks['lm']['synapses']['weights'] > 0)
+        # # Increase the weight of the excitatory recurrent projections to lm e4 neurons
+        # networks['lm']['synapses']['weights'][L4_e_rec_exc_edges_mask] *= flags.E4_weight_factor
 
-        ### Increase interarea weights to E4 in LM
-        inter_target_indices = networks['LM']['interarea_synapses']['V1']['indices'][:, 0] // 4
-        # Get the interarea excitatory projections to LM e4 neurons
-        L4_e_inter_exc_edges_mask =  np.logical_and(np.isin(inter_target_indices, L4_e_ids), networks['LM']['interarea_synapses']['V1']['weights'] > 0)
-        # Increase the weight of the excitatory interarea projections to LM e4 neurons
-        networks['LM']['interarea_synapses']['V1']['weights'][L4_e_inter_exc_edges_mask] *= flags.E4_weight_factor
+        ### Increase interarea weights to E4 in lm
+        inter_target_indices = networks['lm']['interarea_synapses']['v1']['indices'][:, 0] // 4
+        # Get the interarea excitatory projections to lm e4 neurons
+        L4_e_inter_exc_edges_mask =  np.logical_and(np.isin(inter_target_indices, L4_e_ids), networks['lm']['interarea_synapses']['v1']['weights'] > 0)
+        # Increase the weight of the excitatory interarea projections to lm e4 neurons
+        networks['lm']['interarea_synapses']['v1']['weights'][L4_e_inter_exc_edges_mask] *= flags.E4_weight_factor
 
-    # if flags.disconnect_LM_L6_inhibition:
-    #     print('disconnect_LM_L6_inhibition = ', flags.disconnect_LM_L6_inhibition)
+    # if flags.disconnect_lm_L6_inhibition:
+    #     print('disconnect_lm_L6_inhibition = ', flags.disconnect_lm_L6_inhibition)
         
-    #     # Get the indices of the LM L6 neurons
-    #     L6_Sst_ids = networks['LM']['laminar_indices']['L6_i_Sst']
-    #     L6_Htr3a_ids = networks['LM']['laminar_indices']['L6_i_Htr3a']
-    #     L6_Pvalb_ids = networks['LM']['laminar_indices']['L6_i_Pvalb']
+    #     # Get the indices of the lm L6 neurons
+    #     L6_Sst_ids = networks['lm']['laminar_indices']['L6_i_Sst']
+    #     L6_Htr3a_ids = networks['lm']['laminar_indices']['L6_i_Htr3a']
+    #     L6_Pvalb_ids = networks['lm']['laminar_indices']['L6_i_Pvalb']
     #     L6_inh_ids = np.concatenate((L6_Sst_ids, L6_Htr3a_ids, L6_Pvalb_ids))
 
-    #     # Get the recurrent inhibitory projections from LM i6 neurons
-    #     rec_source_indices = networks['LM']['synapses']['indices'][:, 1]
+    #     # Get the recurrent inhibitory projections from lm i6 neurons
+    #     rec_source_indices = networks['lm']['synapses']['indices'][:, 1]
     #     L6_inh_edges_mask = np.isin(rec_source_indices, L6_inh_ids)
-    #     # Set the weight of the recurrent inhibitory projections from LM i6 neurons to zero
-    #     networks['LM']['synapses']['weights'][L6_inh_edges_mask] = 0
+    #     # Set the weight of the recurrent inhibitory projections from lm i6 neurons to zero
+    #     networks['lm']['synapses']['weights'][L6_inh_edges_mask] = 0
 
-    if flags.disconnect_V1_LM_L6_excitatory_projections:
-        print('disconnect_V1_LM_L6_excitation = ', flags.disconnect_V1_LM_L6_excitatory_projections)
+    if flags.disconnect_v1_lm_L6_excitatory_projections:
+        print('disconnect_v1_lm_L6_excitation = ', flags.disconnect_v1_lm_L6_excitatory_projections)
         
-        # Get the indices of the LM L6 neurons
-        L6_e_ids = networks['LM']['laminar_indices']['L6_e']
-        ### Increase interarea weights to E4 in LM
-        inter_target_indices = networks['LM']['interarea_synapses']['V1']['indices'][:, 0] // 4
-        # Get the interarea excitatory projections to LM e4 neurons
-        L6_e_inter_exc_edges_mask =  np.logical_and(np.isin(inter_target_indices, L6_e_ids), networks['LM']['interarea_synapses']['V1']['weights'] > 0)
-        # Increase the weight of the excitatory interarea projections to LM e4 neurons
-        networks['LM']['interarea_synapses']['V1']['weights'][L6_e_inter_exc_edges_mask] = 0
+        # Get the indices of the lm L6 neurons
+        L6_e_ids = networks['lm']['laminar_indices']['L6_e']
+        ### Increase interarea weights to E4 in lm
+        inter_target_indices = networks['lm']['interarea_synapses']['v1']['indices'][:, 0] // 4
+        # Get the interarea excitatory projections to lm e4 neurons
+        L6_e_inter_exc_edges_mask =  np.logical_and(np.isin(inter_target_indices, L6_e_ids), networks['lm']['interarea_synapses']['v1']['weights'] > 0)
+        # Increase the weight of the excitatory interarea projections to lm e4 neurons
+        networks['lm']['interarea_synapses']['v1']['weights'][L6_e_inter_exc_edges_mask] = 0
 
-    n_input = flags.n_input
-    if n_input != 17400:
-        input_population = reduce_input_population(input_population, n_input, seed=flags.seed)
-
-    # n_abstract_output = networks['LM']['laminar_indices']['L5e'].size
-    # n_completed_output = networks['V1']['laminar_indices']['L5e'].size
+    # n_abstract_output = networks['lm']['laminar_indices']['L5e'].size
+    # n_completed_output = networks['v1']['laminar_indices']['L5e'].size
     
-    return input_population, networks, bkg_weights, n_input # , n_abstract_output, n_completed_output
+    # return input_population, networks, bkg_weights, n_input # , n_abstract_output, n_completed_output
+    # return networks, inputs # , n_abstract_output, n_completed_output
+    return networks, lgn_inputs, bkg_inputs
 
 
 # If the model already exist we can load it, or if it does not just save it for future occasions
 def cached_load_billeh(flags, n_neurons, flag_str=None):
     store = False
     # input_population, networks, bkg_weights, n_input, n_abstract_output, n_completed_output  = None, None, None, None, None, None
-    input_population, networks, bkg_weights, n_input = None, None, None, None  # , None, None
+    networks, lgn_inputs, bkg_inputs = None, None, None  # , None, None
     # flag_str = f'ratio{flags.area_neuron_ratio}_rec{flags.neurons}_s{flags.seed}_c{flags.core_only}_con{flags.connected_selection}'
-    V1_neurons = n_neurons['V1']
-    LM_neurons = n_neurons['LM']
+    v1_neurons = n_neurons['v1']
+    lm_neurons = n_neurons['lm']
     if flag_str is None:
-        flag_str = f'V1_{V1_neurons}_LM_{LM_neurons}_s{flags.seed}_c{flags.core_only}_con{flags.connected_selection}_n_input_{flags.n_input}_interarea_weight_distribution_{flags.interarea_weight_distribution}_E4_weight_factor_{flags.E4_weight_factor}_disconnect_V1_LM_L6_excitatory_projections_{flags.disconnect_V1_LM_L6_excitatory_projections}'
+        flag_str = f'v1_{v1_neurons}_lm_{lm_neurons}_s{flags.seed}_c{flags.core_only}_con{flags.connected_selection}_n_input_{flags.n_input}_interarea_weight_distribution_{flags.interarea_weight_distribution}_E4_weight_factor_{flags.E4_weight_factor}_disconnect_v1_lm_L6_excitatory_projections_{flags.disconnect_v1_lm_L6_excitatory_projections}'
     
     file_dir = os.path.split(__file__)[0]
-    cache_path = os.path.join(file_dir, f'.cache/LM_V1_network_{flag_str}.pkl')
-    print(f"> Looking for cached LM/V1 model in {cache_path}")
+    cache_path = os.path.join(file_dir, f'.cache/lm_v1_network_{flag_str}.pkl')
+    print(f"> Looking for cached lm/v1 model in {cache_path}")
 
     if os.path.exists(cache_path):
         try:
             with open(cache_path, 'rb') as f:
-                input_population, networks, bkg_weights, n_input = pkl.load(f)
+                networks, lgn_inputs, bkg_inputs = pkl.load(f)
                 print(f'> Sucessfully restored Billeh model from {cache_path}')
         except Exception as e:
             print(e)
@@ -998,16 +617,16 @@ def cached_load_billeh(flags, n_neurons, flag_str=None):
     else:
         store = True
     # if input_population is None or networks is None or bkg_weights is None or n_input is None or n_abstract_output is None or n_completed_output is None:
-    if input_population is None or networks is None or bkg_weights is None or n_input is None:
+    if networks is None or lgn_inputs is None or bkg_inputs is None:
         # input_population, networks, bkg_weights, n_input, n_abstract_output, n_completed_output = load_billeh(
         #     flags=flags, n_neurons=n_neurons)
-        input_population, networks, bkg_weights, n_input = load_billeh(flags=flags, n_neurons=n_neurons)
+        networks, lgn_inputs, bkg_inputs = load_billeh(flags=flags, n_neurons=n_neurons)
 
     if store:
         os.makedirs(os.path.join(file_dir, '.cache'), exist_ok=True)
         with open(cache_path, 'wb') as f:
             # pkl.dump((input_population, networks, bkg_weights, n_input, n_abstract_output, n_completed_output), f)
-            pkl.dump((input_population, networks, bkg_weights, n_input), f)
-        print(f'> Cached LM_V1 model in {cache_path}')
+            pkl.dump((networks, lgn_inputs, bkg_inputs), f)
+        print(f'> Cached lm_v1 model in {cache_path}')
     # , n_abstract_output, n_completed_output
-    return input_population, networks, bkg_weights, n_input
+    return networks, lgn_inputs, bkg_inputs

@@ -11,86 +11,43 @@ if version.parse(tf.__version__) < version.parse("2.4.0"):
     from tensorflow.keras.mixed_precision import experimental as mixed_precision
 else:
     from tensorflow.keras import mixed_precision
-from Model_utils import load_sparse, models, other_billeh_utils, toolkit
+
+from Model_utils import load_sparse, models, other_billeh_utils, stim_dataset
 from Model_utils.plotting_utils import InputActivityFigure, RasterPlot, LaminarPlot, LGN_sample_plot
 from general_utils import file_management
 from Model_utils.model_metrics_analysis import DirtyAnalysis
 from time import time
-# import callbacks
-# import data_sets
+import ctypes.util
 
 
-class PlotCallback(tf.keras.callbacks.Callback):
-    """Periodically plot the activity of the model based on the same example"""
+# Define the environment variables for optimal GPU performance
+# os.environ['TF_GPU_THREAD_MODE'] = 'gpu_private'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
-    def __init__(self, test_data_set, extractor_model, network, data_dir, batch_ind=0, scale=2, path=None, prefix=''):
-        super().__init__()
-        test_iter = iter(test_data_set)
-        self._test_example = next(test_iter)
-        self._extractor_model = extractor_model
+print("--- CUDA version: ", tf.sysconfig.get_build_info()["cuda_version"])
+print("--- CUDNN version: ", tf.sysconfig.get_build_info()["cudnn_version"])
+print("--- TensorFlow version: ", tf.__version__)
 
-        self.figure = plt.figure(
-            figsize=toolkit.cm2inch((15 * scale, 11 * scale)))
-        gs = self.figure.add_gridspec(5, 1)
-        self.input_ax = self.figure.add_subplot(gs[0])
-        self.activity_ax = self.figure.add_subplot(gs[1:-1])
-        self.output_ax = self.figure.add_subplot(gs[-1])
+# For CUDA Runtime API
+lib_path = ctypes.util.find_library('cudart')
+print("--- CUDA Library path: ", lib_path)
 
-        self.inputs_plot = RasterPlot(
-            batch_ind=batch_ind, scale=scale, y_label='Input Neuron ID', alpha=1.)
-        self.laminar_plot = LaminarPlot(
-            network, data_dir, batch_ind=batch_ind, scale=scale, alpha=.4)
-        self.tightened = False
-        self.scale = scale
-        self.network = network
-        self.batch_ind = batch_ind
-        self._counter = 0
-        self._path = path
-        self._prefix = prefix
-
-    def on_epoch_begin(self, epoch, logs=None):
-        inputs = self._test_example[0]
-        targets = self._test_example[1]
-        (z, v), prediction, all_prediction = self._extractor_model(inputs)
-
-        self.input_ax.clear()
-        self.activity_ax.clear()
-        self.output_ax.clear()
-        self.inputs_plot(self.input_ax, inputs[0].numpy())
-        self.input_ax.set_xticklabels([])
-        toolkit.apply_style(self.input_ax, scale=self.scale)
-        self.laminar_plot(self.activity_ax, z.numpy())
-        self.activity_ax.set_xticklabels([])
-        toolkit.apply_style(self.activity_ax, scale=self.scale)
-
-        all_pred_np = tf.nn.softmax(models.exp_convolve(
-            all_prediction[self.batch_ind], axis=0, decay=.8)).numpy()
-        self.output_ax.plot(
-            all_pred_np[:, 1], 'r', alpha=.7, lw=self.scale, label='Up')
-        self.output_ax.plot(
-            all_pred_np[:, 0], 'b', alpha=.7, lw=self.scale, label='Down')
-        self.output_ax.set_ylim([0, 1])
-        self.output_ax.set_yticks([0, 1])
-        self.output_ax.set_xlim([0, all_pred_np.shape[0]])
-        self.output_ax.set_xticks([0, all_pred_np.shape[0]])
-        self.output_ax.legend(frameon=False, fontsize=5 * self.scale)
-        self.output_ax.set_xlabel('Time in ms')
-        self.output_ax.set_ylabel('Probability')
-        toolkit.apply_style(self.output_ax, scale=self.scale)
-
-        if not self.tightened:
-            self.figure.tight_layout()
-            self.tightened = True
-
-        self._counter += 1
-        if self._path is not None:
-            self.figure.savefig(os.path.join(
-                self._path, f'{self._prefix}raster_epoch_{self._counter}.png'), dpi=300)
+debug = False
 
 
 def main(_):
-    flags = absl.app.flags.FLAGS
+    # Allow for memory growth (also to observe memory consumption)
+    physical_devices = tf.config.list_physical_devices("GPU")
+    for dev in physical_devices:
+        try:
+            tf.config.experimental.set_memory_growth(dev, True)
+            print(f"Memory growth enabled for device {dev}")
+        except:
+            print(f"Invalid device {dev} or cannot modify virtual devices once initialized.")
+            pass
+    print("- Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')), '\n')
 
+    flags = absl.app.flags.FLAGS
     np.random.seed(flags.seed)
     tf.random.set_seed(flags.seed)
 
@@ -126,17 +83,6 @@ def main(_):
     with open(os.path.join(simulation_results_path, 'flags_config.json'), 'w') as fp:
         json.dump(flags.flag_values_dict(), fp)
 
-    # Allow for memory growth (also to observe memory consumption)
-    physical_devices = tf.config.list_physical_devices('GPU')
-    try:
-        for dev in physical_devices:
-            tf.config.experimental.set_memory_growth(dev, True)
-    except:
-        # Invalid device or cannot modify virtual devices once initialized.
-        pass
-
-    print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
-
     # Can be used to try half precision training
     if flags.float16:
         policy = mixed_precision.Policy('mixed_float16')
@@ -164,11 +110,12 @@ def main(_):
     else:
         load_fn = load_sparse.load_billeh
 
-    input_population, networks, bkg_weights, n_input = load_fn(flags, n_neurons, flag_str=flag_str)
+    networks, lgn_inputs, bkg_inputs = load_fn(flags, n_neurons)
 
     input_weight_scale = 1.
 
     ### LGN INPUT ###
+    
     # lgn_firing_rates_filename = f"orientation_{str(flags.gratings_orientation)}&TF_{str(float(flags.gratings_frequency))}&SF_0.04&reverse_False&init_screen_dur_1.0&visual_flow_dur_1.0&end_screen_dur_1.0&min_value_-1&max_value_1&contrast_0.8&dt_0.001&height_120&width_240&init_gray_screen_False&end_gray_screen_False.lzma"
     lgn_firing_rates_filename = f"orientation_{str(flags.gratings_orientation)}&TF_{str(float(flags.gratings_frequency))}&SF_0.04&reverse_False&init_screen_dur_0.5&visual_flow_dur_2.5&end_screen_dur_0.0&min_value_-1&max_value_1&contrast_0.8&dt_0.001&height_120&width_240&init_gray_screen_True&end_gray_screen_False.lzma"
     with open(os.path.join(flags.data_dir, "input", "Drifting_gratings", lgn_firing_rates_filename), "rb") as f:
@@ -185,12 +132,31 @@ def main(_):
 
     # Build the model
     model = models.create_model(
-        networks, input_population, bkg_weights, 
-        output_completed_valid_from_time=120, output_abstract_valid_from_time=100,
-        seq_len=flags.seq_len, n_input=flags.n_input, dtype=tf.float32, input_weight_scale=input_weight_scale,
-        interarea_weight_scale=1., gauss_std=flags.gauss_std, dampening_factor=flags.dampening_factor, lr_scale=flags.lr_scale,
-        train_recurrent_v1=flags.train_recurrent_v1, train_recurrent_lm=flags.train_recurrent_lm, train_input=flags.train_input, train_interarea=flags.train_interarea,
-        use_state_input=True, return_state=True, add_rate_metric=True, max_delay=5, batch_size=flags.batch_size, pseudo_gauss=flags.pseudo_gauss, hard_reset=flags.hard_reset)
+        networks, 
+        lgn_inputs, 
+        bkg_inputs, 
+        seq_len=flags.seq_len,
+        n_input=flags.n_input, 
+        dtype=tf.float32, 
+        input_weight_scale=input_weight_scale,
+        interarea_weight_scale=1., 
+        dampening_factor=flags.dampening_factor, 
+        gauss_std=flags.gauss_std, 
+        lr_scale=flags.lr_scale,
+        train_recurrent_v1=flags.train_recurrent_v1, 
+        train_recurrent_lm=flags.train_recurrent_lm, 
+        train_input=flags.train_input, 
+        train_interarea=flags.train_interarea,
+        batch_size=flags.batch_size, 
+        pseudo_gauss=flags.pseudo_gauss, 
+        use_state_input=True, 
+        return_state=True,
+        hard_reset=flags.hard_reset,
+        add_rate_metric=True, 
+        max_delay=5, 
+        # output_completed_valid_from_time=120, 
+        # output_abstract_valid_from_time=100,
+        )
 
     model.build((flags.batch_size, flags.seq_len, flags.n_input))
 
@@ -226,81 +192,82 @@ def main(_):
         save_dtype = np.float32
     data_path = os.path.join(simulation_results_path, "Data")
 
-    # SimulationDataHDF5 = other_billeh_utils.SaveSimDataHDF5(
-    #     flags, keys, data_path, networks, n_neurons, v1_to_lm_neurons_ratio, save_core_only=True, dtype=save_dtype
-    # )
+    SimulationDataHDF5 = other_billeh_utils.SaveSimDataHDF5(
+        flags, keys, data_path, networks, n_neurons, v1_to_lm_neurons_ratio, save_core_only=True, dtype=save_dtype
+    )
 
-    # time_per_sim = 0
-    # time_per_save = 0
-    # for trial in range(0, flags.n_simulations):
-    #     print('{trial}:new trial'.format(trial=trial))
-    #     inputs = (np.random.uniform(size=inputs.shape,
-    #                                 low=0., high=1.) < firing_rates * .001).astype(np.float32)
-    #     # Simulate the model for one stimulus sequence
-    #     t0 = time()
-    #     out = extractor_model((inputs, dummy_zeros, state))
-    #     time_per_sim += time() - t0
+    time_per_sim = 0
+    time_per_save = 0
+    for trial in range(0, flags.n_simulations):
+        print('{trial}:new trial'.format(trial=trial))
+        inputs = (np.random.uniform(size=inputs.shape,
+                                    low=0., high=1.) < firing_rates * .001).astype(np.float32)
+        # Simulate the model for one stimulus sequence
+        t0 = time()
+        out = extractor_model((inputs, dummy_zeros, state))
+        time_per_sim += time() - t0
+        print('Simulation time: ', time() - t0)
 
-    #     # Extract spikes and membrane voltages
-    #     t0 = time()
-    #     network_outputs = out[0][0]
-    #     v1_spikes, v1_voltage, lm_spikes, lm_voltage = network_outputs
+        # Extract spikes and membrane voltages
+        t0 = time()
+        network_outputs = out[0][0]
+        v1_spikes, v1_voltage, lm_spikes, lm_voltage = network_outputs
 
-    #     # Save simulation data
-    #     simulation_data = {
-    #         "v1": {
-    #             "z": v1_spikes,
-    #             # "v": v1_voltage
-    #         },
-    #         "lm": {
-    #             "z": lm_spikes,
-    #             # "v": lm_voltage
-    #         },
-    #         "LGN": {
-    #             "z_lgn": inputs
-    #         }
-    #     }
+        # Save simulation data
+        simulation_data = {
+            "v1": {
+                "z": v1_spikes,
+                # "v": v1_voltage
+            },
+            "lm": {
+                "z": lm_spikes,
+                # "v": lm_voltage
+            },
+            "LGN": {
+                "z_lgn": inputs
+            }
+        }
         
-    #     SimulationDataHDF5(simulation_data, trial)
-    #     time_per_save += time() - t0
+        SimulationDataHDF5(simulation_data, trial)
+        time_per_save += time() - t0
 
-    #     # Reset the model state to the last state of the previous simulation
-    #     state = out[0][1:]
+        # Reset the model state to the last state of the previous simulation
+        state = out[0][1:]
 
-    # # Save the simulation metadata  
-    # time_per_sim /= flags.n_simulations
-    # time_per_save /= flags.n_simulations
-    # metadata_path = os.path.join(data_path, 'Simulation stats')
-    # with open(metadata_path, 'w') as out_file:
-    #     out_file.write(f'Consumed time per simulation: {time_per_sim}\n')
-    #     out_file.write(f'Consumed time saving: {time_per_save}\n')
+    # Save the simulation metadata  
+    time_per_sim /= flags.n_simulations
+    time_per_save /= flags.n_simulations
+    metadata_path = os.path.join(data_path, 'Simulation stats')
+    with open(metadata_path, 'w') as out_file:
+        out_file.write(f'Consumed time per simulation: {time_per_sim}\n')
+        out_file.write(f'Consumed time saving: {time_per_save}\n')
 
-    # # Plot last trial raster plot
-    # raster_filename = 'Raster_plot.png'
-    # image_path = os.path.join(simulation_results_path, 'Images general')
-    # os.makedirs(image_path, exist_ok=True)
-    # graph = InputActivityFigure(networks, flags.data_dir, image_path,
-    #                             filename=raster_filename, frequency=flags.gratings_frequency,
-    #                             stimuli_init_time=500, stimuli_end_time=3000)
-    # graph(inputs, v1_spikes, lm_spikes)
+    # Plot last trial raster plot
+    raster_filename = 'Raster_plot.png'
+    image_path = os.path.join(simulation_results_path, 'Images general')
+    os.makedirs(image_path, exist_ok=True)
+    graph = InputActivityFigure(networks, flags.data_dir, image_path,
+                                filename=raster_filename, frequency=flags.gratings_frequency,
+                                stimuli_init_time=500, stimuli_end_time=3000)
+    graph(inputs, v1_spikes, lm_spikes)
 
     # # Plot last trial LGN sample plot
     # LGN_units = LGN_sample_plot(firing_rates, inputs, stimuli_init_time=0.5,
     #                             stimuli_end_time=flags.seq_len/1000, images_dir=image_path, n_samples=2)
     # LGN_units()
 
-    # Dirty boxplot the firing rates
-    v1_dirty_analysis = DirtyAnalysis(flags, networks['v1'], simulation_results_path, area='v1', 
-                                      drifting_gratings_init=500, drifting_gratings_end=3000, 
-                                      path=results_path, skip_first_simulation=True)
-    v1_dirty_analysis.plot_tuning_curves()
-    v1_dirty_analysis.plot_boxplots()
+    # # Dirty boxplot the firing rates
+    # v1_dirty_analysis = DirtyAnalysis(flags, networks['v1'], simulation_results_path, area='v1', 
+    #                                   drifting_gratings_init=500, drifting_gratings_end=3000, 
+    #                                   path=results_path, skip_first_simulation=True)
+    # v1_dirty_analysis.plot_tuning_curves()
+    # v1_dirty_analysis.plot_boxplots()
 
-    lm_dirty_analysis = DirtyAnalysis(flags, networks['lm'], simulation_results_path, area='lm', 
-                                      drifting_gratings_init=500, drifting_gratings_end=3000, 
-                                      path=results_path, skip_first_simulation=True)
-    lm_dirty_analysis.plot_tuning_curves()
-    lm_dirty_analysis.plot_boxplots()
+    # lm_dirty_analysis = DirtyAnalysis(flags, networks['lm'], simulation_results_path, area='lm', 
+    #                                   drifting_gratings_init=500, drifting_gratings_end=3000, 
+    #                                   path=results_path, skip_first_simulation=True)
+    # lm_dirty_analysis.plot_tuning_curves()
+    # lm_dirty_analysis.plot_boxplots()
                         
 
     ### TRAINING ###
@@ -459,5 +426,6 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_boolean('hard_only', False, '')
     absl.app.flags.DEFINE_boolean('visualize_test', False, '')
     absl.app.flags.DEFINE_boolean('pseudo_gauss', False, '')
+    absl.app.flags.DEFINE_boolean("bmtk_compat_lgn", True, "")
 
     absl.app.run(main)
