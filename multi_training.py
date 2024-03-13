@@ -26,8 +26,8 @@ import ctypes.util
 # Define the environment variables for optimal GPU performance
 # os.environ['TF_GPU_THREAD_MODE'] = 'gpu_private'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-# TF_GPU_ALLOCATOR=cuda_malloc_async
-
+os.environ['TF_GPU_ALLOCATOR'] = 'cuda_malloc_async'
+# os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
 print("--- CUDA version: ", tf.sysconfig.get_build_info()["cuda_version"])
 print("--- CUDNN version: ", tf.sysconfig.get_build_info()["cudnn_version"])
 print("--- TensorFlow version: ", tf.__version__)
@@ -52,13 +52,13 @@ def main(_):
     print("- Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')), '\n')
 
     flags = absl.app.flags.FLAGS
+    # Set the seeds for reproducibility
     np.random.seed(flags.seed)
     tf.random.set_seed(flags.seed)
 
-    # Select the connectivity rules in the network
-    v1_to_lm_neurons_ratio = 7.010391285652859
-
-    if flags.realistic_neurons_ratio and flags.lm_neurons is None:
+    if flags.realistic_neurons_ratio:
+        # Select the connectivity rules in the network
+        v1_to_lm_neurons_ratio = 7.010391285652859
         n_neurons = {'v1': flags.v1_neurons,
                      'lm': int(flags.v1_neurons/v1_to_lm_neurons_ratio)}
     else:
@@ -69,24 +69,22 @@ def main(_):
     v1_neurons = n_neurons['v1']
     lm_neurons = n_neurons['lm']
 
-    # Save the configuration of the model
-    flag_str = f'v1_{v1_neurons}_lm_{lm_neurons}'
-    for name, value in flags.flag_values_dict().items():
-        if value != flags[name].default and name in ['learning_rate', 'rate_cost', 'voltage_cost', 'osi_cost', 'temporal_f', 'n_input', 'seq_len']:
-            print(name, value, flags[name].default)
-            flag_str += f'_{name}_{value}'
-    # Define flag string as the second part of results_path
-    results_dir = f'{flags.results_dir}/{flag_str}'
-    os.makedirs(results_dir, exist_ok=True)
-    print('Simulation results path: ', results_dir)
-    # Save the flags configuration in a JSON file
-    with open(os.path.join(results_dir, 'flags_config.json'), 'w') as fp:
-        json.dump(flags.flag_values_dict(), fp)
-
-    # Generate a ticker for the current simulation
-    sim_name = toolkit.get_random_identifier('b_')
-    logdir = os.path.join(results_dir, sim_name)
-    print(f'> Results for {flags.task_name} will be stored in:\n {logdir} \n')
+    logdir = flags.ckpt_dir
+    if logdir == '':
+        flag_str = f'v1_{v1_neurons}_lm_{lm_neurons}'
+        for name, value in flags.flag_values_dict().items():
+            if value != flags[name].default and name in ['learning_rate', 'rate_cost', 'voltage_cost', 'osi_cost', 'temporal_f', 'n_input', 'seq_len']:
+                flag_str += f'_{name}_{value}'
+        # Define flag string as the second part of results_path
+        results_dir = f'{flags.results_dir}/{flag_str}'
+        os.makedirs(results_dir, exist_ok=True)
+        print('Simulation results path: ', results_dir)
+        # Generate a ticker for the current simulation
+        sim_name = toolkit.get_random_identifier('b_')
+        logdir = os.path.join(results_dir, sim_name)
+        print(f'> Results for {flags.task_name} will be stored in:\n {logdir} \n')
+    else:
+        flag_str = logdir.split(os.path.sep)[-2]
 
     # Can be used to try half precision training
     if flags.float16:
@@ -110,7 +108,7 @@ def main(_):
 
     per_replica_batch_size = flags.batch_size
     global_batch_size = per_replica_batch_size * strategy.num_replicas_in_sync
-    print(f'Global batch size: {global_batch_size}\n')
+    print(f'Global batch size: {strategy.num_replicas_in_sync}, {global_batch_size}\n')
 
     # Define 2 outputs that correspond to having more cues top or bottom
     # Note that two different output conventions can be used:
@@ -128,7 +126,7 @@ def main(_):
         load_fn = load_sparse.cached_load_billeh
     else:
         load_fn = load_sparse.load_billeh
-    networks, lgn_inputs, bkg_inputs = load_fn(flags, n_neurons)
+    networks, lgn_inputs, bkg_inputs = load_fn(flags, n_neurons, flag_str=flag_str)
     print(f"Model files loading: {time()-t0:.2f} seconds\n")
 
     # Define the scope in which the model training will be executed
@@ -167,16 +165,32 @@ def main(_):
 
         model.build((flags.batch_size, flags.seq_len, flags.n_input))
         print(f"Model built in {time()-t0:.2f} s\n")
+         
+        # Define the optimizer
+        optimizer = tf.keras.optimizers.Adam(flags.learning_rate, epsilon=1e-11)  
+        optimizer.build(model.trainable_variables)
+
+        # Restore model and optimizer from a checkpoint if it exists
+        if flags.ckpt_dir != '' and os.path.exists(flags.ckpt_dir):
+            print(f'Restoring checkpoint from {flags.ckpt_dir}...')
+            checkpoint_directory = tf.train.latest_checkpoint(os.path.join(flags.ckpt_dir, "OSI_DSI_checkpoints"))
+            checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
+            checkpoint.restore(checkpoint_directory).assert_consumed()
+            print('Checkpoint restored!')
+        else:
+            checkpoint = None
 
         ### BUILD THE LOSS AND REGULARIZER FUNCTIONS ###
         # Create rate and voltage regularizers
         delays = [int(a) for a in flags.delays.split(',') if a != '']
-        if flags.core_loss:
-            v1_core_radius = 200
-            v1_core_mask = other_billeh_utils.isolate_core_neurons(networks['v1'], radius=v1_core_radius, data_dir=flags.data_dir)
+        if flags.core_loss and v1_neurons > 51978:
+            v1_core_mask = other_billeh_utils.isolate_core_neurons(networks['v1'], n_selected_neurons=51978, data_dir=flags.data_dir)
             v1_core_mask = tf.constant(v1_core_mask, dtype=tf.bool)
+            lm_core_mask = other_billeh_utils.isolate_core_neurons(networks['lm'], n_selected_neurons=7414, data_dir=flags.data_dir)
+            lm_core_mask = tf.constant(lm_core_mask, dtype=tf.bool)
         else:
             v1_core_mask = None
+            lm_core_mask = None
 
         rsnn_layer = model.get_layer('rsnn')
         lm_to_v1_weight_regularizer = losses.StiffRegularizer(flags.recurrent_weight_regularization,
@@ -185,26 +199,25 @@ def main(_):
                                                             rsnn_layer.cell.lm.interarea_weight_values['v1'])
 
         v1_rate_distribution_regularizer = losses.SpikeRateDistributionTarget(networks['v1'], flags.rate_cost, pre_delay=delays[0], post_delay=delays[1], 
-                                                                            data_dir=flags.data_dir, area='v1', core_mask=None, seed=flags.seed, dtype=dtype)
+                                                                            data_dir=flags.data_dir, area='v1', core_mask=v1_core_mask, seed=flags.seed, dtype=dtype)
         lm_rate_distribution_regularizer = losses.SpikeRateDistributionTarget(networks['lm'], flags.rate_cost, pre_delay=delays[0], post_delay=delays[1], 
-                                                                            data_dir=flags.data_dir, area='lm', core_mask=None, seed=flags.seed, dtype=dtype)
+                                                                            data_dir=flags.data_dir, area='lm', core_mask=lm_core_mask, seed=flags.seed, dtype=dtype)
         rate_loss = v1_rate_distribution_regularizer(rsnn_layer.output[0][0]) + lm_rate_distribution_regularizer(rsnn_layer.output[0][2])
 
-        v1_voltage_regularizer = losses.VoltageRegularization(rsnn_layer.cell.v1, area='v1', voltage_cost=flags.voltage_cost, dtype=dtype, core_mask=None)
-        lm_voltage_regularizer = losses.VoltageRegularization(rsnn_layer.cell.lm, area='lm', voltage_cost=flags.voltage_cost, dtype=dtype, core_mask=None)
+        v1_voltage_regularizer = losses.VoltageRegularization(rsnn_layer.cell.v1, area='v1', voltage_cost=flags.voltage_cost, dtype=dtype, core_mask=v1_core_mask)
+        lm_voltage_regularizer = losses.VoltageRegularization(rsnn_layer.cell.lm, area='lm', voltage_cost=flags.voltage_cost, dtype=dtype, core_mask=lm_core_mask)
         voltage_loss = v1_voltage_regularizer(rsnn_layer.output[0][1]) + lm_voltage_regularizer(rsnn_layer.output[0][3])
 
         v1_tuning_angles = tf.constant(networks['v1']['tuning_angle'], dtype=dtype)
         lm_tuning_angles = tf.constant(networks['lm']['tuning_angle'], dtype=dtype)
         v1_OSI_Loss = losses.OrientationSelectivityLoss(v1_tuning_angles, osi_cost=flags.osi_cost, area='v1',
                                                         pre_delay=delays[0], post_delay=delays[1], 
-                                                        dtype=dtype, core_mask=None)
+                                                        dtype=dtype, core_mask=v1_core_mask)
         lm_OSI_Loss = losses.OrientationSelectivityLoss(lm_tuning_angles, osi_cost=flags.osi_cost, area='lm',
                                                         pre_delay=delays[0], post_delay=delays[1], 
-                                                        dtype=dtype, core_mask=None)
-        osi_loss = v1_OSI_Loss(rsnn_layer.output[0][0], tf.constant(0, dtype=tf.float32, shape=(1,))) \
-                + lm_OSI_Loss(rsnn_layer.output[0][2], tf.constant(0, dtype=tf.float32, shape=(1,))) # this is just a placeholder
-
+                                                        dtype=dtype, core_mask=lm_core_mask)
+        osi_loss = v1_OSI_Loss.original_version(rsnn_layer.output[0][0], tf.constant(0, dtype=tf.float32, shape=(1,))) \
+                + lm_OSI_Loss.original_version(rsnn_layer.output[0][2], tf.constant(0, dtype=tf.float32, shape=(1,))) # this is just a placeholder
 
         # Load the firing rates distribution as a regularizer that we have and generate target firing rates for every neuron type
         # with open(os.path.join(flags.data_dir, 'np_gratings_firing_rates.pkl'), 'rb') as f:
@@ -238,7 +251,6 @@ def main(_):
         #     rec_weight_loss = rec_weight_regularizer(rsnn_layer.cell.recurrent_weight_values)
         #     return tf.nn.compute_average_loss(per_example_loss, global_batch_size=global_batch_size) + rec_weight_loss
         
-        optimizer = tf.keras.optimizers.Adam(flags.learning_rate, epsilon=1e-11)  
         # These "dummy" zeros are injected to the models membrane voltage
         # Provides the opportunity to compute gradients wrt. membrane voltages at all time steps
         # Not important for general use
@@ -247,7 +259,6 @@ def main(_):
         state_variables = tf.nest.map_structure(lambda a: tf.Variable(
             a, trainable=False, synchronization=tf.VariableSynchronization.ON_READ
         ), zero_state)
-        optimizer.build(model.trainable_variables)  # Add this line to build the optimizer with the trainable variables
 
         # Add other metrics and losses
         train_loss = tf.keras.metrics.Mean()
@@ -281,6 +292,7 @@ def main(_):
             new_state = tuple(_out[1:])
             tf.nest.map_structure(lambda a, b: a.assign(b), state_variables, new_state)
 
+            # with tf.control_dependencies([state_variables]):
             v1_voltage_loss = v1_voltage_regularizer(_v1_v)
             lm_voltage_loss = lm_voltage_regularizer(_lm_v)
             voltage_loss = v1_voltage_loss + lm_voltage_loss
@@ -289,15 +301,15 @@ def main(_):
             lm_rate_loss = lm_rate_distribution_regularizer(_lm_z)
             rate_loss = v1_rate_loss + lm_rate_loss
 
-            v1_osi_loss = v1_OSI_Loss(_v1_z, _y)
-            lm_osi_loss = lm_OSI_Loss(_lm_z, _y)
+            v1_osi_loss = v1_OSI_Loss.javi_version(_v1_z, _y)
+            lm_osi_loss = lm_OSI_Loss.javi_version(_lm_z, _y)
             osi_loss = v1_osi_loss + lm_osi_loss
 
             lm_to_v1_weights_l2_regularizer = lm_to_v1_weight_regularizer(rsnn_layer.cell.v1.interarea_weight_values['lm'])
             v1_to_lm_weights_l2_regularizer = v1_to_lm_weight_regularizer(rsnn_layer.cell.lm.interarea_weight_values['v1'])
             weights_l2_regularizer = lm_to_v1_weights_l2_regularizer + v1_to_lm_weights_l2_regularizer
 
-            _aux = dict(rate_loss=rate_loss, voltage_loss=voltage_loss, osi_loss=osi_loss)
+            _aux = dict(rate_loss=rate_loss, voltage_loss=voltage_loss, osi_loss=osi_loss, weights_l2_regularizer=weights_l2_regularizer)
             _loss = osi_loss + rate_loss + voltage_loss + weights_l2_regularizer
 
             return _out, _p, _loss, _aux
@@ -312,7 +324,7 @@ def main(_):
                 return _out, _p, _loss, _aux     
 
 
-        def train_step(_x, _y, _w):
+        def train_step(_x, _y, _w, output_metrics=False):
             ### Forward propagation of the model
             with tf.GradientTape() as tape:
                 _out, _p, _loss, _aux = roll_out(_x, _y, _w)
@@ -321,26 +333,40 @@ def main(_):
             _op = train_accuracy.update_state(_y, _p, sample_weight=_w)
             with tf.control_dependencies([_op]):
                 _op = train_loss.update_state(_loss)
-                _rate = tf.reduce_mean(_out[0][0])
-                _op = train_firing_rate.update_state(_rate)
-                _op = train_rate_loss.update_state(_aux['rate_loss'])
-                _op = train_voltage_loss.update_state(_aux['voltage_loss'])
-                _op = train_osi_loss.update_state(_aux['osi_loss'])
-            
-                
-            # with tf.control_dependencies([_op]):
-            #     _op = train_voltage_loss.update_state(_aux['voltage_loss'])
 
+            _rate = tf.reduce_mean(tf.concat([_out[0][0], _out[0][2]], axis=-1))
+            with tf.control_dependencies([_op]):                   
+                _op = train_firing_rate.update_state(_rate)
+
+            with tf.control_dependencies([_op]):
+                _op = train_rate_loss.update_state(_aux['rate_loss'])
+
+            with tf.control_dependencies([_op]):
+                _op = train_voltage_loss.update_state(_aux['voltage_loss'])
+
+            with tf.control_dependencies([_op]):
+                _op = train_osi_loss.update_state(_aux['osi_loss'])    
+
+            tf.print("Train Loss:", train_loss.result(), _loss, ' - ', _y, tf.reduce_sum(tf.cast(_x, tf.float32)))  
+                
             grad = tape.gradient(_loss, model.trainable_variables)
             for g, v in zip(grad, model.trainable_variables):
-                # tf.print(f'{v.name} optimization')
-                # tf.print('Loss, total_gradients : ', _loss, tf.reduce_sum(tf.math.abs(g)))
+                tf.print(f'{v.name} optimization')
+                tf.print('Loss, total_gradients : ', _loss, tf.reduce_sum(tf.math.abs(g)))
                 with tf.control_dependencies([_op]):
                     _op = optimizer.apply_gradients([(g, v)])
+
+            if output_metrics:
+                return [0., _loss, _rate, _aux['rate_loss'], _aux['voltage_loss'], _aux['osi_loss']]
+                
                     
         @tf.function
-        def distributed_train_step(x, y, weights):
-            strategy.run(train_step, args=(x, y, weights))
+        def distributed_train_step(x, y, weights, output_metrics=False):
+            if output_metrics:
+                _out = strategy.run(train_step, args=(x, y, weights, output_metrics))
+                return _out
+            else:
+                strategy.run(train_step, args=(x, y, weights))  
 
         # @tf.function
         # def distributed_train_step(dist_inputs):
@@ -350,21 +376,25 @@ def main(_):
 
         def validation_step(_x, _y, _w, output_spikes=True):
             _out, _p, _loss, _aux = roll_out(_x, _y, _w)
+            tf.print("Validation loss:", _loss)
             _op = val_accuracy.update_state(_y, _p, sample_weight=_w)
             with tf.control_dependencies([_op]):
                 _op = val_loss.update_state(_loss)
-                _rate = tf.reduce_mean(_out[0][0])
+            _rate = tf.reduce_mean(tf.concat([_out[0][0], _out[0][2]], axis=-1))
+            with tf.control_dependencies([_op]):
                 _op = val_firing_rate.update_state(_rate)
+            with tf.control_dependencies([_op]):
                 _op = val_rate_loss.update_state(_aux['rate_loss'])
+            with tf.control_dependencies([_op]):
                 _op = val_voltage_loss.update_state(_aux['voltage_loss'])
+            with tf.control_dependencies([_op]):
                 _op = val_osi_loss.update_state(_aux['osi_loss'])
-                
+                            
             # tf.nest.map_structure(lambda _a, _b: _a.assign(_b), list(state_variables), _out[1:])
 
             if output_spikes:
                 _v1_z, _lm_z = _out[0][0], _out[0][2]
                 return _v1_z, _lm_z
-
 
         @tf.function
         def distributed_validation_step(x, y, weights, output_spikes=True):
@@ -445,12 +475,13 @@ def main(_):
                 'val_firing_rate', 'val_rate_loss', 'val_voltage_loss', 'val_osi_loss']
         delays = [int(a) for a in flags.delays.split(',') if a != '']
         callbacks = Callbacks(model, optimizer, distributed_roll_out, networks, flags, logdir, strategy, 
-                            metric_keys, pre_delay=delays[0], post_delay=delays[1])
+                            metric_keys, pre_delay=delays[0], post_delay=delays[1], checkpoint=checkpoint)
 
         callbacks.on_train_begin()
-        for epoch in range(flags.n_epochs):
+        n_prev_epochs = flags.run_session * flags.n_epochs
+        for epoch in range(n_prev_epochs, n_prev_epochs + flags.n_epochs):
             callbacks.on_epoch_start()  
-            # Reset the model state to the gray state    
+            # Reset the model state to the gray state  
             gray_state = distributed_reset_state('gray')  
             
             # Load the dataset iterator - this must be done inside the epoch loop
@@ -459,38 +490,32 @@ def main(_):
             # tf.profiler.experimental.start(logdir=logdir)
             for step in range(flags.steps_per_epoch):
                 callbacks.on_step_start()
+                # print(f'{epoch}.{step}.0: ', model.trainable_variables)  
+                # print(f'{epoch}.{step}.0: ', state_variables[1])
                 distributed_reset_state('gray', gray_state=gray_state)
                 x, y, _, w = next(it) # x dtype tf.bool
                 # with tf.profiler.experimental.Trace('train', step_num=step, _r=1):
-                distributed_train_step(x, y, w)
-                train_values = [a.result().numpy() for a in [train_accuracy, train_loss, train_firing_rate, 
-                                                            train_rate_loss, train_voltage_loss, train_osi_loss]]
-
-                callbacks.on_step_end(train_values, y, verbose=False)
+                step_values = distributed_train_step(x, y, w, output_metrics=True)
+                callbacks.on_step_end(step_values, y, verbose=True)
 
             # tf.profiler.experimental.stop() 
 
-            # ## VALIDATION AFTER EACH EPOCH
-                
+            # ## VALIDATION AFTER EACH EPOCH            
             # test_it = iter(test_data_set)
-            test_it = it
             for step in range(flags.val_steps):
-                x, y, _, w = next(test_it)
+                x, y, _, w = next(it)
                 distributed_reset_state('gray', gray_state=gray_state)
                 v1_spikes, lm_spikes = distributed_validation_step(x, y, w, output_spikes=True) 
-
-            val_values = [a.result().numpy() for a in [val_accuracy, val_loss, val_firing_rate, 
-                                                    val_rate_loss, val_voltage_loss, val_osi_loss]]
+            
+            train_values = [a.result().numpy() for a in [train_accuracy, train_loss, train_firing_rate, 
+                                                        train_rate_loss, train_voltage_loss, train_osi_loss]]
+            val_values = train_values # for our case, training set and testing set are undistinguishible
+            # val_values = [a.result().numpy() for a in [val_accuracy, val_loss, val_firing_rate, 
+            #                                         val_rate_loss, val_voltage_loss, val_osi_loss]]
             metric_values = train_values + val_values
 
-            # saving model
-            print('Saving model...')
-            model.save('my_model.keras', save_format='h5')
-
             # if the model train loss is minimal, save the model.
-            stop = callbacks.on_epoch_end(x, v1_spikes, lm_spikes, y, metric_values)
-
-            
+            stop = callbacks.on_epoch_end(x, v1_spikes, lm_spikes, y, metric_values, verbose=True)    
 
             if stop:
                 break
@@ -529,10 +554,13 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_float('temporal_f', 2., '')
     absl.app.flags.DEFINE_float('max_time', -1, '')
 
+    absl.app.flags.DEFINE_integer('n_runs', 1, '')
+    absl.app.flags.DEFINE_integer('run_session', 0, '')
     absl.app.flags.DEFINE_integer('n_epochs', 20, '')
+    absl.app.flags.DEFINE_integer('osi_dsi_eval_period', 50, '') # number of epochs for osi/dsi evaluation if n_runs = 1
     absl.app.flags.DEFINE_integer('batch_size', 1, '')
     absl.app.flags.DEFINE_integer('v1_neurons', 10, '')  # -1 to take all neurons
-    absl.app.flags.DEFINE_integer('lm_neurons', None, '')  # -1 to take all neurons
+    absl.app.flags.DEFINE_integer('lm_neurons', 10, '')  # -1 to take all neurons
     absl.app.flags.DEFINE_integer('steps_per_epoch', 10, '')# EA and garret dose not need this many but pure classification needs 781 = int(50000/64)
     absl.app.flags.DEFINE_integer('val_steps', 1, '')# EA and garret dose not need this many but pure classification needs 156 = int(10000/64)
     # number of LGN filters in visual space (input population)
@@ -550,7 +578,7 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_boolean('float16', False, '')
     absl.app.flags.DEFINE_boolean('caching', True, '')
     absl.app.flags.DEFINE_boolean('core_only', False, '')
-    absl.app.flags.DEFINE_boolean('core_loss', False, '')
+    absl.app.flags.DEFINE_boolean('core_loss', True, '')
     absl.app.flags.DEFINE_boolean('hard_reset', False, '')
     absl.app.flags.DEFINE_boolean('disconnect_lm_L6_inhibition', False, '')
     absl.app.flags.DEFINE_boolean('disconnect_v1_lm_L6_excitatory_projections', False, '')
@@ -568,5 +596,7 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_boolean('pseudo_gauss', False, '')
     absl.app.flags.DEFINE_boolean("bmtk_compat_lgn", True, "")
     absl.app.flags.DEFINE_boolean("average_grad_for_cell_type", False, "")
+
+    absl.app.flags.DEFINE_string('ckpt_dir', '', '')
 
     absl.app.run(main)

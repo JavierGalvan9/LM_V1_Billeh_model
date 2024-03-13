@@ -447,8 +447,8 @@ def reduce_input_population(input_population, new_n_input, seed=3000):
 
     return new_input_population
 
-def load_billeh(flags, n_neurons):
-
+def load_billeh(flags, n_neurons, flag_str=''):
+    # flag_str is an argument only used for the cached_load_billeh network
     networks = dict()
     lgn_inputs = dict()
     bkg_inputs = dict()

@@ -44,7 +44,7 @@
 # run -c 1 -m 24 -t 3:30 -o Out/kernprof.out -e Error/kernprof.err "kernprof -l -v drifting_gratings2.py --batch_size 1 --v1_neurons 5000 --seq_len 600 --n_epochs 1"
 
 # run -c 1 -m 48 -t 2:30 -o Out/lm_v1.out -e Error/lm_v1.err -j small "python drifting_gratings2.py --batch_size 1 --v1_neurons 50000 --seq_len 3000 --n_simulations 1"
-run -c 1 -m 120 -t 2:30 -o Out/gordo.out -e Error/gordo.err -j gordo "python drifting_gratings2.py --batch_size 1 --v1_neurons 230924 --seq_len 3000 --n_simulations 1"
+run -g 1 -m 24 -t 2:30 -o Out/drifting_gratings2.out -e Error/drifting_gratings2.err -j drifting_gratings2 "python drifting_gratings2.py --batch_size 1 --v1_neurons 10000 --seq_len 3000 --n_simulations 1"
 
 # run -c 1 -m 24 -t 1:30 -o Out/lm_v1.out -e Error/lm_v1.err "python drifting_gratings2.py --batch_size 1 --v1_neurons 50000 --seq_len 3000 --n_simulations 1"
 # run -c 1 -m 24 -t 1:30 -o Out/kernprof.out -e Error/kernprof.err "kernprof -l -v drifting_gratings2.py --batch_size 1 --v1_neurons 51978 --seq_len 3000 --n_simulations 1"

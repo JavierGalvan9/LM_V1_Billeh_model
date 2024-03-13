@@ -18,7 +18,7 @@ sys.path.append(os.path.join(parentDir, "general_utils"))
 import file_management
 
 
-def pop_names(network, core_radius = None, data_dir='GLIF_network'):
+def pop_names(network, core_radius = None, n_selected_neurons=None, data_dir='GLIF_network'):
     path_to_csv = os.path.join(data_dir, 'network/v1_node_types.csv')
     path_to_h5 = os.path.join(data_dir, 'network/v1_nodes.h5')
 
@@ -35,7 +35,12 @@ def pop_names(network, core_radius = None, data_dir='GLIF_network'):
 
         if core_radius is not None:
             selected_mask = isolate_core_neurons(network, radius=core_radius, data_dir=data_dir)
-            true_pop_names = true_pop_names[selected_mask]
+        elif n_selected_neurons is not None:
+            selected_mask = isolate_core_neurons(network, n_selected_neurons=n_selected_neurons, data_dir=data_dir)
+        else:
+            selected_mask = np.full(len(true_pop_names), True)
+            
+        true_pop_names = true_pop_names[selected_mask]
 
     return true_pop_names
 
@@ -49,14 +54,19 @@ def angle_tunning(network, data_dir='GLIF_network'):
     return angle_tunning
 
 
-def isolate_core_neurons(network, radius=400, data_dir='GLIF_network'):
+def isolate_core_neurons(network, radius=None, n_selected_neurons=None, data_dir='GLIF_network'):
     path_to_h5 = os.path.join(data_dir, 'network/v1_nodes.h5')
     node_h5 = h5py.File(path_to_h5, mode='r')
     x = node_h5['nodes']['v1']['0']['x'][()][network['tf_id_to_bmtk_id']]
     z = node_h5['nodes']['v1']['0']['z'][()][network['tf_id_to_bmtk_id']]
     r = np.sqrt(x ** 2 + z ** 2)
-    selected_mask = r < radius
-       
+    if radius is not None:
+        selected_mask = r < radius
+    # if a number of neurons is given, select the closest neurons
+    elif n_selected_neurons is not None:
+        selected_mask = np.argsort(r)[:n_selected_neurons]
+        selected_mask = np.isin(np.arange(len(r)), selected_mask)
+    
     return selected_mask
 
 
