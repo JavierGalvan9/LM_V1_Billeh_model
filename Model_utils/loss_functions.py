@@ -94,7 +94,7 @@ class SpikeRateDistributionTarget:
         self._area = area
         self._core_mask = core_mask
         if self._core_mask is not None:
-            self._core_mask = self._core_mask.numpy()
+            self._np_core_mask = self._core_mask.numpy()
         self._data_dir = data_dir
         self._dtype = dtype
         self._seed = seed
@@ -176,7 +176,7 @@ class SpikeRateDistributionTarget:
             neuron_ids = np.where(np.isin(self._network["node_type_ids"], value["ids"]))[0]
             if self._core_mask is not None:
                 # if core_mask is not None, use only neurons in the core
-                neuron_ids = neuron_ids[self._core_mask[neuron_ids]]
+                neuron_ids = neuron_ids[self._np_core_mask[neuron_ids]]
 
             neuron_ids = tf.cast(neuron_ids, dtype=tf.int32)
             target_firing_rates[key]['neuron_ids'] = neuron_ids
@@ -192,7 +192,12 @@ class SpikeRateDistributionTarget:
             spikes = spikes[:, self._pre_delay:, :]
         if self._post_delay is not None and self._post_delay != 0:
             spikes = spikes[:, :-self._post_delay, :]
+
+        if self._core_mask is not None:
+            spikes = tf.boolean_mask(spikes, self._core_mask, axis=2)
+
         reg_loss = compute_spike_rate_target_loss(spikes, self._target_rates, dtype=self._dtype) 
+        
         return reg_loss * self._rate_cost
 
 
@@ -267,7 +272,7 @@ class OrientationSelectivityLoss:
 
         return delta_angle
 
-    def __call__(self, spikes, angle):
+    def shinya_version(self, spikes, angle):
         # I need to access the tuning angle. of all the neurons.
         angle = tf.cast(angle, self._dtype)
 
@@ -290,5 +295,63 @@ class OrientationSelectivityLoss:
         angle_loss = tf.reduce_mean(tf.abs(mean_angle)) - expected_sum_angle
 
         return tf.abs(angle_loss) * self._osi_cost
+        # return angle_loss * self._osi_cost
 
+    def javi_version(self, spikes, angle):
+        angle = tf.cast(angle, self._dtype) 
+        delta_angle = tf.expand_dims(angle, axis=1) -  self._tuning_angles
+        # delta_angle = self._tuning_angles - tf.expand_dims(angle, axis=1)
+        # i want the delta_angle to be within 0-360
+        delta_angle = tf.math.floormod(delta_angle, tf.constant(360, dtype=self._dtype))
+
+        delta_angle = delta_angle * (np.pi / 180)
+
+        if self._core_mask is not None:
+            spikes = tf.boolean_mask(spikes, self._core_mask, axis=2)
+            
+        if self._pre_delay is not None:
+            spikes = spikes[:, self._pre_delay:, :]
+        if self._post_delay is not None and self._post_delay != 0:
+            spikes = spikes[:, :-self._post_delay, :]
+
+        # sum spikes in _z, and multiply with delta_angle.
+        mean_spikes = tf.reduce_mean(spikes, axis=[1]) 
+
+        # Convert mean_spikes to a complex tensor with zero imaginary part
+        mean_spikes = tf.cast(mean_spikes, tf.complex64)
+
+        # Calculate weighted responses for OSI numerator
+        # Adjust for preferred orientation by incorporating e^(2i(theta - theta_pref))
+        weighted_responses_numerator = mean_spikes * tf.exp(tf.complex(0.0, 2.0 * delta_angle))
+        approximated_numerator = tf.reduce_sum(weighted_responses_numerator)
+        
+        # Calculate denominator as the sum of mean_spikes
+        approximated_denominator = tf.reduce_sum(mean_spikes)
+        
+        # Calculate OSI approximation
+        osi_approx = tf.abs(approximated_numerator / tf.cast(approximated_denominator, tf.complex64))
+
+        return tf.abs(osi_approx - 1) * self._osi_cost
+
+    def original_version(self, spikes, angle):
+        # I need to access the tuning angle. of all the neurons.
+        angle = tf.cast(angle, self._dtype)
+
+        if self._core_mask is not None:
+            spikes = tf.boolean_mask(spikes, self._core_mask, axis=2)
+
+        if self._pre_delay is not None:
+            spikes = spikes[:, self._pre_delay:, :]
+        if self._post_delay is not None and self._post_delay != 0:
+            spikes = spikes[:, :-self._post_delay, :]
+
+        delta_angle = self.calculate_delta_angle(angle, self._tuning_angles)
+        # sum spikes in _z, and multiply with delta_angle.
+        sum_angle = tf.reduce_mean(spikes, axis=[1]) * delta_angle
+        # make a huber loss for this.
+        # angle_loss = tf.keras.losses.Huber(delta=1, reduction=tf.keras.losses.Reduction.SUM)(sum_angle, tf.zeros_like(sum_angle))
+        angle_loss = tf.reduce_mean(tf.abs(sum_angle))
+        # it might be nice to add regularization of weights
+        # rec_weight_loss = rec_weight_regularizer(rsnn_layer.cell.recurrent_weight_values)
+        return angle_loss * self._osi_cost
         

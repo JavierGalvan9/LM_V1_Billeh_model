@@ -15,7 +15,6 @@ else:
 from Model_utils import load_sparse, models, other_billeh_utils, stim_dataset
 from Model_utils.plotting_utils import InputActivityFigure, RasterPlot, LaminarPlot, LGN_sample_plot
 from general_utils import file_management
-from Model_utils.model_metrics_analysis import DirtyAnalysis
 from time import time
 import ctypes.util
 
@@ -147,6 +146,7 @@ def main(_):
         train_recurrent_lm=flags.train_recurrent_lm, 
         train_input=flags.train_input, 
         train_interarea=flags.train_interarea,
+        train_noise=flags.train_noise,
         batch_size=flags.batch_size, 
         pseudo_gauss=flags.pseudo_gauss, 
         use_state_input=True, 
@@ -157,6 +157,24 @@ def main(_):
         # output_completed_valid_from_time=120, 
         # output_abstract_valid_from_time=100,
         )
+
+    # Restore weights from a checkpoint if desired
+    optimizer = tf.keras.optimizers.Adam(flags.learning_rate, epsilon=1e-11)  
+    optimizer.build(model.trainable_variables) 
+
+    print('Restoring checkpoint...')
+    print(model.trainable_variables)
+    checkpoint_directory = "Simulation_results/v1_10000_lm_1426/b_8bga"
+    checkpoint_prefix = os.path.join(checkpoint_directory, "ckpt")
+    checkpoint = tf.train.Checkpoint(model=model)
+    checkpoint.restore(tf.train.latest_checkpoint(checkpoint_directory)).assert_consumed()
+    print('Checkpoint restored!')
+    print(model.trainable_variables)
+
+    # restore_from = '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Simulation_results/v1_10000_lm_1426/b_9y57/checkpoint'
+    # if restore_from != '':
+    #     model.load_weights(restore_from)
+    #     print(f'> Model successfully restored from {restore_from}')
 
     model.build((flags.batch_size, flags.seq_len, flags.n_input))
 
@@ -383,7 +401,7 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_integer('gratings_frequency', 2, '')
     absl.app.flags.DEFINE_integer('n_simulations', 20, '')
 
-    absl.app.flags.DEFINE_float('learning_rate', .001, '')
+    absl.app.flags.DEFINE_float('learning_rate', .01, '')
     absl.app.flags.DEFINE_float('rate_cost', 0., '')
     absl.app.flags.DEFINE_float('voltage_cost', .001, '')
     absl.app.flags.DEFINE_float('dampening_factor', .1, '')
@@ -418,9 +436,10 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_boolean('disconnect_v1_lm_L6_excitatory_projections', False, '')
     absl.app.flags.DEFINE_boolean('realistic_neurons_ratio', True, '')
     absl.app.flags.DEFINE_boolean('train_recurrent_v1', True, '')
-    absl.app.flags.DEFINE_boolean('train_recurrent_lm', True, '')
+    absl.app.flags.DEFINE_boolean('train_recurrent_lm', False, '')
     absl.app.flags.DEFINE_boolean('train_input', True, '')
     absl.app.flags.DEFINE_boolean('train_interarea', True, '')
+    absl.app.flags.DEFINE_boolean('train_noise', False, '')
     absl.app.flags.DEFINE_boolean('connected_selection', True, '')
     absl.app.flags.DEFINE_boolean('neuron_output', True, '')
     absl.app.flags.DEFINE_boolean('hard_only', False, '')

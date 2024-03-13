@@ -22,12 +22,13 @@ class InputActivityFigure:
                 reverse=False, 
                 plot_core_only=True):
         
-        self.figure = plt.figure(
-            figsize=toolkit.cm2inch((15 * scale, 11 * scale)))
+        self.figure = plt.figure(figsize=toolkit.cm2inch((15 * scale, 11 * scale)))
         gs = self.figure.add_gridspec(11, 1)
         self.input_ax = self.figure.add_subplot(gs[:2])
-        self.v1_activity_ax = self.figure.add_subplot(gs[2:6])
-        self.lm_activity_ax = self.figure.add_subplot(gs[6:-1])
+        # self.v1_activity_ax = self.figure.add_subplot(gs[2:6])
+        # self.lm_activity_ax = self.figure.add_subplot(gs[6:-1])
+        self.v1_activity_ax = self.figure.add_subplot(gs[2:8])
+        self.lm_activity_ax = self.figure.add_subplot(gs[8:-1])
         self.drifting_grating_ax = self.figure.add_subplot(gs[-1])
 
         self.inputs_plot = RasterPlot(
@@ -235,11 +236,12 @@ class LaminarPlot:
 
         if self.area_name == 'v1':
             self.core_neurons = 51978
-            core_radius = 400
+            # core_radius = 400
         elif self.area_name == 'lm':
-            self.core_neurons = 7285
             v1_to_lm_neurons_ratio = 7.010391285652859
-            core_radius = 400/np.sqrt(v1_to_lm_neurons_ratio)
+            self.core_neurons = int(51978/v1_to_lm_neurons_ratio) # 7414
+            # core_neurons = 7414
+            # core_radius = 400/np.sqrt(v1_to_lm_neurons_ratio)
         else:
             raise ValueError('Area not supported')
 
@@ -247,7 +249,7 @@ class LaminarPlot:
             if self.n_neurons > self.core_neurons:
                 self.n_neurons = self.core_neurons
             self.core_mask = other_billeh_utils.isolate_core_neurons(
-                self.network, radius=core_radius, data_dir=self.data_dir)
+                self.network, n_selected_neurons=self.core_neurons, data_dir=self.data_dir)
         else:
             self.core_mask = np.full(self.n_neurons, True)
 
