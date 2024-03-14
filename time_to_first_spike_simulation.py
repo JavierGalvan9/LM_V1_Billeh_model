@@ -12,9 +12,9 @@ if version.parse(tf.__version__) < version.parse("2.4.0"):
 else:
     from tensorflow.keras import mixed_precision
 
-from Model_utils import load_sparse, models, other_billeh_utils, stim_dataset, toolkit
-from Model_utils.plotting_utils import InputActivityFigure, RasterPlot, LaminarPlot, LGN_sample_plot
-from Model_utils.model_metrics_analysis import ModelMetricsAnalysis
+from Model_utils import load_sparse, models, other_billeh_utils, stim_dataset
+from Model_utils.plotting_utils import InputActivityFigure
+from general_utils import file_management
 from time import time
 import ctypes.util
 
@@ -22,8 +22,7 @@ import ctypes.util
 # Define the environment variables for optimal GPU performance
 # os.environ['TF_GPU_THREAD_MODE'] = 'gpu_private'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-os.environ['TF_GPU_ALLOCATOR'] = 'cuda_malloc_async'
-# os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
+
 print("--- CUDA version: ", tf.sysconfig.get_build_info()["cuda_version"])
 print("--- CUDNN version: ", tf.sysconfig.get_build_info()["cudnn_version"])
 print("--- TensorFlow version: ", tf.__version__)
@@ -31,8 +30,6 @@ print("--- TensorFlow version: ", tf.__version__)
 # For CUDA Runtime API
 lib_path = ctypes.util.find_library('cudart')
 print("--- CUDA Library path: ", lib_path)
-
-debug = False
 
 def printgpu(verbose=0):
     if tf.config.list_physical_devices('GPU'):
@@ -43,6 +40,7 @@ def printgpu(verbose=0):
             print(f"GPU memory use: {current:.2f} GB / Peak: {peak:.2f} GB")
         if verbose == 1:
             return current, peak
+
 
 def main(_):
     # Allow for memory growth (also to observe memory consumption)
@@ -61,38 +59,16 @@ def main(_):
     np.random.seed(flags.seed)
     tf.random.set_seed(flags.seed)
 
-    # Select the connectivity rules in the network
-    if flags.realistic_neurons_ratio:
-        v1_to_lm_neurons_ratio = 7.010391285652859
-        n_neurons = {'v1': flags.v1_neurons,
-                     'lm': int(flags.v1_neurons/v1_to_lm_neurons_ratio)}
-    else:
-        n_neurons = {'v1': flags.v1_neurons,
-                     'lm': flags.lm_neurons}
-
     # Get the neurons of each column of the network
-    v1_neurons = n_neurons['v1']
-    lm_neurons = n_neurons['lm']
+    n_neurons = {'v1': flags.v1_neurons, 'lm': flags.lm_neurons}
 
-    logdir = flags.ckpt_dir
-    if logdir == '':
-        flag_str = f'v1_{v1_neurons}_lm_{lm_neurons}'
-        for name, value in flags.flag_values_dict().items():
-            if value != flags[name].default and name in ['learning_rate', 'rate_cost', 'voltage_cost', 'osi_cost', 'temporal_f', 'n_input', 'seq_len']:
-                flag_str += f'_{name}_{value}'
-        # Define flag string as the second part of results_path
-        results_dir = f'{flags.results_dir}/{flag_str}'
-        os.makedirs(results_dir, exist_ok=True)
-        print('Simulation results path: ', results_dir)
-        # Generate a ticker for the current simulation
-        sim_name = toolkit.get_random_identifier('b_')
-        logdir = os.path.join(results_dir, sim_name)
-        print(f'> Results for {flags.task_name} will be stored in:\n {logdir} \n')
-        current_epoch = 0
-    else:
-        flag_str = logdir.split(os.path.sep)[-2]
-        current_epoch = (flags.run_session + 1) * flags.n_epochs
-        
+    # Define flag string as the second part of results_path
+    flag_str = f'v1_{n_neurons["v1"]}_lm_{n_neurons["lm"]}'
+    
+    # Create the results path
+    results_dir = flags.results_dir
+    os.makedirs(results_dir, exist_ok=True)
+    print(f'> Results will be stored in:\n {results_dir} \n')
 
     # Can be used to try half precision training
     if flags.float16:
@@ -105,30 +81,16 @@ def main(_):
     else:
         dtype = tf.float32
 
-    n_workers, n_gpus_per_worker = 1, 1
-    # model is being run on multiple GPUs or CPUs, and the results are being reduced to a single CPU device. 
-    # In this case, the reduce_to_device argument is set to "cpu:0", which means that the results are being reduced to the first CPU device.
-    # strategy = tf.distribute.MirroredStrategy(cross_device_ops=tf.distribute.ReductionToOneDevice(reduce_to_device="cpu:0")) 
     device = "/gpu:0" if tf.config.list_physical_devices("GPU") else "/cpu:0"
     strategy = tf.distribute.OneDeviceStrategy(device=device)
 
-    per_replica_batch_size = flags.batch_size
-    global_batch_size = per_replica_batch_size * strategy.num_replicas_in_sync
-    print(f'Global batch size: {global_batch_size}\n')
-
-    # Define 2 outputs that correspond to having more cues top or bottom
-    # Note that two different output conventions can be used:
-    # 1) Linear readouts from all neurons in the model (softmax)
-    # 2) Selecting a population of neurons that report a binary decision
-    # with high firing rate (flag --neuron_output)
-    # n_output = 2
-
-    # Load data of Billeh et al. (2020) and select appropriate number of neurons and inputs
+    # Load LM-V1 column data
     t0 = time()
     if flags.caching:
         load_fn = load_sparse.cached_load_billeh
     else:
         load_fn = load_sparse.load_billeh
+
     networks, lgn_inputs, bkg_inputs = load_fn(flags, n_neurons, flag_str=flag_str)
     print(f"Model files loading: {time()-t0:.2f} seconds\n")
 
@@ -163,7 +125,7 @@ def main(_):
             # output_completed_valid_from_time=120, 
             # output_abstract_valid_from_time=100,
             )
-
+        
         del lgn_inputs, bkg_inputs
 
         model.build((flags.batch_size, flags.seq_len, flags.n_input))
@@ -173,25 +135,24 @@ def main(_):
         optimizer = tf.keras.optimizers.Adam(flags.learning_rate, epsilon=1e-11)  
         optimizer.build(model.trainable_variables)
 
+        # Restore weights from a checkpoint if desired
         # Restore model and optimizer from a checkpoint if it exists
+        print(model.trainable_variables)
         if flags.ckpt_dir != '' and os.path.exists(flags.ckpt_dir):
             print(f'Restoring checkpoint from {flags.ckpt_dir}...')
-            checkpoint_directory = tf.train.latest_checkpoint(os.path.join(flags.ckpt_dir, "OSI_DSI_checkpoints"))
+            checkpoint_directory = tf.train.latest_checkpoint(flags.ckpt_dir)
             checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
             checkpoint.restore(checkpoint_directory).assert_consumed()
             print('Checkpoint restored!')
-            print(f'OSI/DSI results for epoch {current_epoch} will be saved in: {checkpoint_directory}\n')
-        else:
-            checkpoint = None # no restoration from any checkpoint
+
+        print(model.trainable_variables)
 
         # Build the model layers
         rsnn_layer = model.get_layer('rsnn')
-        # prediction_layer = model.get_layer('prediction')
-        abstract_layer = model.get_layer('abstract_output')
         extractor_model = tf.keras.Model(inputs=model.inputs,
                                          outputs=[rsnn_layer.output, model.output[0], model.output[1]])
 
-        n_total_neurons = v1_neurons + lm_neurons
+        n_total_neurons = n_neurons['v1'] + n_neurons['lm']
         zero_state = rsnn_layer.cell.zero_state_multi_areas(flags.batch_size, np.float32)
         state_variables = tf.nest.map_structure(lambda a: tf.Variable(
             a, trainable=False, synchronization=tf.VariableSynchronization.ON_READ
@@ -213,9 +174,9 @@ def main(_):
         def distributed_roll_out(x, y, w):
             _v1_z, _lm_z = strategy.run(roll_out, args=(x, y, w))
             return _v1_z, _lm_z
-        
+
         # Define OSI/DSI dataset
-        def get_osi_dsi_dataset_fn(regular=False):
+        def get_dataset_fn(regular=False):
             def _f(input_context):
                 post_delay = flags.seq_len - (2500 % flags.seq_len)
                 _data_set = stim_dataset.generate_drifting_grating_tuning(
@@ -229,19 +190,18 @@ def main(_):
                 return _data_set
             return _f
         
-        osi_dsi_data_set = strategy.distribute_datasets_from_function(get_osi_dsi_dataset_fn(regular=True))
+        data_set = strategy.distribute_datasets_from_function(get_dataset_fn())
 
         print('Starting to plot OSI and DSI...')
         sim_duration = (2500//flags.seq_len + 1) * flags.seq_len
-        n_trials_per_angle = 1
         v1_spikes = np.zeros((8, sim_duration, networks['v1']['n_nodes']), dtype=float)
         lm_spikes = np.zeros((8, sim_duration, networks['lm']['n_nodes']), dtype=float)
         DG_angles = np.arange(0, 360, 45)
-        for trial_id in range(n_trials_per_angle):
-            test_it = iter(osi_dsi_data_set)
+        for trial_id in range(flags.n_trials):
+            data_it = iter(data_set)
             for angle_id, angle in enumerate(range(0, 360, 45)):
                 t0 = time()
-                x, y, _, w = next(test_it)
+                x, y, _, w = next(data_it)
                 chunk_size = flags.seq_len
                 num_chunks = (2500//chunk_size + 1)
                 for i in range(num_chunks):
@@ -261,7 +221,7 @@ def main(_):
                                                 networks,
                                                 flags.data_dir,
                                                 images_dir,
-                                                filename=f'Epoch_{current_epoch}_0_orientation',
+                                                filename=f'Epoch_0_orientation',
                                                 frequency=flags.temporal_f,
                                                 stimuli_init_time=500,
                                                 stimuli_end_time=2500,
@@ -275,92 +235,139 @@ def main(_):
                 mem_data = printgpu(verbose=1)
                 print(f'    Memory consumption (current - peak): {mem_data[0]:.2f} GB - {mem_data[1]:.2f} GB\n')
 
-
         # Average the spikes over the number of trials
         v1_spikes = v1_spikes/n_trials_per_angle
         v1_spikes = v1_spikes[:, :2500, :]
         lm_spikes = lm_spikes/n_trials_per_angle
         lm_spikes = lm_spikes[:, :2500, :]
 
-        # Do the OSI/DSI analysis       
-        boxplots_dir = os.path.join(flags.ckpt_dir, "OSI_DSI_checkpoints", 'Boxplots_OSI_DSI')
-        os.makedirs(boxplots_dir, exist_ok=True)
-        for spikes, area in zip([v1_spikes, lm_spikes], ['v1', 'lm']):
-            metrics_analysis = ModelMetricsAnalysis(networks[area], data_dir=flags.data_dir,
-                                                    drifting_gratings_init=500, drifting_gratings_end=2500,
-                                                    area=area, analyze_core_only=True, directory=boxplots_dir, filename=f'Epoch_{current_epoch}')
-            metrics_analysis(spikes, DG_angles)
+    keys = ["z", "v", "z_lgn"] # "input_current", "recurrent_current", "bottom_up_current"
+    
+    # # Select the dtype of the data saved
+    # if flags.save_float16:
+    #     save_dtype = np.float16
+    # else:
+    #     save_dtype = np.float32
+    # data_path = os.path.join(simulation_results_path, "Data")
+
+    # SimulationDataHDF5 = other_billeh_utils.SaveSimDataHDF5(
+    #     flags, keys, data_path, networks, n_neurons, v1_to_lm_neurons_ratio, save_core_only=True, dtype=save_dtype
+    # )
+
+    # time_per_sim = 0
+    # time_per_save = 0
+    # for trial in range(0, flags.n_simulations):
+    #     print('{trial}:new trial'.format(trial=trial))
+    #     inputs = (np.random.uniform(size=inputs.shape,
+    #                                 low=0., high=1.) < firing_rates * .001).astype(np.float32)
+    #     # Simulate the model for one stimulus sequence
+    #     t0 = time()
+    #     out = extractor_model((inputs, dummy_zeros, state))
+    #     time_per_sim += time() - t0
+    #     print('Simulation time: ', time() - t0)
+
+    #     # Extract spikes and membrane voltages
+    #     t0 = time()
+    #     network_outputs = out[0][0]
+    #     v1_spikes, v1_voltage, lm_spikes, lm_voltage = network_outputs
+
+    #     # Save simulation data
+    #     simulation_data = {
+    #         "v1": {
+    #             "z": v1_spikes,
+    #             # "v": v1_voltage
+    #         },
+    #         "lm": {
+    #             "z": lm_spikes,
+    #             # "v": lm_voltage
+    #         },
+    #         "LGN": {
+    #             "z_lgn": inputs
+    #         }
+    #     }
+        
+    #     SimulationDataHDF5(simulation_data, trial)
+    #     time_per_save += time() - t0
+
+    #     # Reset the model state to the last state of the previous simulation
+    #     state = out[0][1:]
+
+    # # Save the simulation metadata  
+    # time_per_sim /= flags.n_simulations
+    # time_per_save /= flags.n_simulations
+    # metadata_path = os.path.join(data_path, 'Simulation stats')
+    # with open(metadata_path, 'w') as out_file:
+    #     out_file.write(f'Consumed time per simulation: {time_per_sim}\n')
+    #     out_file.write(f'Consumed time saving: {time_per_save}\n')
 
 
 if __name__ == '__main__':
-    _data_dir = 'GLIF_network'
-    _results_dir = 'Simulation_results'
 
-    absl.app.flags.DEFINE_string('task_name', 'drifting_gratings_firing_rates_distr' , '')
-    absl.app.flags.DEFINE_string('data_dir', _data_dir, '')
-    absl.app.flags.DEFINE_string('results_dir', _results_dir, '')
-    absl.app.flags.DEFINE_string('restore_from', '', '')
-    absl.app.flags.DEFINE_string('comment', '', '')
-    absl.app.flags.DEFINE_string('interarea_weight_distribution', 'billeh_like', '')
-    absl.app.flags.DEFINE_string('delays', '100,0', '')
+    # Define the directory to save the results
+    _results_dir = 'Time_to_first_spike_analysis'
+    _checkpoint_dir = 'Current_model'
 
-    absl.app.flags.DEFINE_float('learning_rate', .01, '')
-    absl.app.flags.DEFINE_float('rate_cost', 100., '')
-    absl.app.flags.DEFINE_float('voltage_cost', .00001, '')
-    absl.app.flags.DEFINE_float('osi_cost', 1., '')
-    absl.app.flags.DEFINE_float('dampening_factor', .1, '')
-    absl.app.flags.DEFINE_float('recurrent_dampening_factor', .5, '')
-    absl.app.flags.DEFINE_float('input_weight_scale', 1., '')
-    absl.app.flags.DEFINE_float('gauss_std', .3, '')
-    absl.app.flags.DEFINE_float('recurrent_weight_regularization', 0., '')
-    absl.app.flags.DEFINE_float('lr_scale', 1., '')
-    absl.app.flags.DEFINE_float('input_f0', 0.2, '')
-    absl.app.flags.DEFINE_float('E4_weight_factor', 1., '')
-    absl.app.flags.DEFINE_float('temporal_f', 2., '')
-    absl.app.flags.DEFINE_float('max_time', -1, '')
+    # Load the best model configuration and set it as default
+    config_path = 'Current_model/config.json'
+    with open(config_path, 'r') as f:
+        flags_dict = json.load(f)
 
-    absl.app.flags.DEFINE_integer('n_runs', 1, '')
-    absl.app.flags.DEFINE_integer('run_session', 0, '')
-    absl.app.flags.DEFINE_integer('n_epochs', 20, '')
-    absl.app.flags.DEFINE_integer('batch_size', 1, '')
-    absl.app.flags.DEFINE_integer('v1_neurons', 10, '')  # -1 to take all neurons
-    absl.app.flags.DEFINE_integer('lm_neurons', None, '')  # -1 to take all neurons
-    absl.app.flags.DEFINE_integer('steps_per_epoch', 10, '')# EA and garret dose not need this many but pure classification needs 781 = int(50000/64)
-    absl.app.flags.DEFINE_integer('val_steps', 1, '')# EA and garret dose not need this many but pure classification needs 156 = int(10000/64)
-    # number of LGN filters in visual space (input population)
-    absl.app.flags.DEFINE_integer('n_input', 17400, '')
-    absl.app.flags.DEFINE_integer('seq_len', 600, '')
-    absl.app.flags.DEFINE_integer('n_cues', 3, '')
-    absl.app.flags.DEFINE_integer('recall_duration', 40, '')
-    absl.app.flags.DEFINE_integer('cue_duration', 40, '')
-    absl.app.flags.DEFINE_integer('interval_duration', 40, '')
-    absl.app.flags.DEFINE_integer('examples_in_epoch', 32, '')
-    absl.app.flags.DEFINE_integer('validation_examples', 16, '')
-    absl.app.flags.DEFINE_integer('seed', 3000, '')
-    absl.app.flags.DEFINE_integer('neurons_per_output', 16, '')
+    # Define particular task flags
+    absl.flags.DEFINE_string('results_dir', _results_dir, '')
+    absl.flags.DEFINE_string('ckpt_dir', _checkpoint_dir, '')
+    absl.flags.DEFINE_integer('n_trials', 1, '')
 
-    absl.app.flags.DEFINE_boolean('float16', False, '')
-    absl.app.flags.DEFINE_boolean('caching', True, '')
-    absl.app.flags.DEFINE_boolean('core_only', False, '')
-    absl.app.flags.DEFINE_boolean('core_loss', True, '')
-    absl.app.flags.DEFINE_boolean('hard_reset', False, '')
-    absl.app.flags.DEFINE_boolean('disconnect_lm_L6_inhibition', False, '')
-    absl.app.flags.DEFINE_boolean('disconnect_v1_lm_L6_excitatory_projections', False, '')
-    absl.app.flags.DEFINE_boolean('realistic_neurons_ratio', True, '')
-    absl.app.flags.DEFINE_boolean('train_recurrent_v1', False, '')
-    absl.app.flags.DEFINE_boolean('train_recurrent_lm', False, '')
-    absl.app.flags.DEFINE_boolean('train_input', False, '')
-    absl.app.flags.DEFINE_boolean('train_interarea', True, '')
-    absl.app.flags.DEFINE_boolean('train_noise', False, '')
-    # absl.app.flags.DEFINE_boolean('train_recurrent_per_type', False, '')
-    absl.app.flags.DEFINE_boolean('connected_selection', True, '')
-    absl.app.flags.DEFINE_boolean('neuron_output', True, '')
-    # absl.app.flags.DEFINE_boolean('hard_only', False, '')
-    absl.app.flags.DEFINE_boolean('visualize_test', False, '')
-    absl.app.flags.DEFINE_boolean('pseudo_gauss', False, '')
-    absl.app.flags.DEFINE_boolean("bmtk_compat_lgn", True, "")
-    absl.app.flags.DEFINE_boolean("average_grad_for_cell_type", False, "")
 
-    absl.app.flags.DEFINE_string('ckpt_dir', '', '')
+    # Define the flags using the loaded values as defaults
+    absl.flags.DEFINE_string('data_dir', flags_dict.get('data_dir', 'GLIF_network'), '')
+    absl.flags.DEFINE_string('restore_from', flags_dict.get('restore_from', ''), '')
+    absl.flags.DEFINE_string('comment', flags_dict.get('comment', ''), '')
+    absl.flags.DEFINE_string('interarea_weight_distribution', flags_dict.get('interarea_weight_distribution', 'billeh_like'), '')
+    absl.flags.DEFINE_integer('gratings_orientation', flags_dict.get('gratings_orientation', 0), '')
+    absl.flags.DEFINE_integer('gratings_frequency', flags_dict.get('gratings_frequency', 2), '')
+    absl.flags.DEFINE_integer('n_simulations', flags_dict.get('n_simulations', 20), '')
+    absl.flags.DEFINE_float('learning_rate', flags_dict.get('learning_rate', .01), '')
+    absl.flags.DEFINE_float('rate_cost', flags_dict.get('rate_cost', 0.), '')
+    absl.flags.DEFINE_float('voltage_cost', flags_dict.get('voltage_cost', .001), '')
+    absl.flags.DEFINE_float('dampening_factor', flags_dict.get('dampening_factor', .1), '')
+    absl.flags.DEFINE_float('recurrent_dampening_factor', flags_dict.get('recurrent_dampening_factor', .5), '')
+    absl.flags.DEFINE_float('gauss_std', flags_dict.get('gauss_std', .3), '')
+    absl.flags.DEFINE_float('lr_scale', flags_dict.get('lr_scale', 1.), '')
+    absl.flags.DEFINE_float('input_f0', flags_dict.get('input_f0', 0.2), '')
+    absl.flags.DEFINE_float('E4_weight_factor', flags_dict.get('E4_weight_factor', 1.), '')
+    absl.flags.DEFINE_float('input_weight_scale', flags_dict.get('input_weight_scale', 1.), '')
+    absl.flags.DEFINE_integer('n_epochs', flags_dict.get('n_epochs', 20), '')
+    absl.flags.DEFINE_integer('batch_size', flags_dict.get('batch_size', 1), '')
+    absl.flags.DEFINE_integer('v1_neurons', flags_dict.get('v1_neurons', 10), '')
+    absl.flags.DEFINE_integer('lm_neurons', flags_dict.get('lm_neurons', None), '')
+    absl.flags.DEFINE_integer('n_input', flags_dict.get('n_input', 17400), '')
+    absl.flags.DEFINE_integer('seq_len', flags_dict.get('seq_len', 3000), '')
+    absl.flags.DEFINE_integer('n_cues', flags_dict.get('n_cues', 3), '')
+    absl.flags.DEFINE_integer('recall_duration', flags_dict.get('recall_duration', 40), '')
+    absl.flags.DEFINE_integer('cue_duration', flags_dict.get('cue_duration', 40), '')
+    absl.flags.DEFINE_integer('interval_duration', flags_dict.get('interval_duration', 40), '')
+    absl.flags.DEFINE_integer('examples_in_epoch', flags_dict.get('examples_in_epoch', 32), '')
+    absl.flags.DEFINE_integer('validation_examples', flags_dict.get('validation_examples', 16), '')
+    absl.flags.DEFINE_integer('seed', flags_dict.get('seed', 3000), '')
+    absl.flags.DEFINE_integer('neurons_per_output', flags_dict.get('neurons_per_output', 16), '')
+    absl.flags.DEFINE_boolean('float16', flags_dict.get('float16', False), '')
+    absl.flags.DEFINE_boolean('save_float16', flags_dict.get('save_float16', True), '')
+    absl.flags.DEFINE_boolean('caching', flags_dict.get('caching', True), '')
+    absl.flags.DEFINE_boolean('core_only', flags_dict.get('core_only', False), '')
+    absl.flags.DEFINE_boolean('hard_reset', flags_dict.get('hard_reset', False), '')
+    absl.flags.DEFINE_boolean('disconnect_lm_L6_inhibition', flags_dict.get('disconnect_lm_L6_inhibition', False), '')
+    absl.flags.DEFINE_boolean('disconnect_v1_lm_L6_excitatory_projections', flags_dict.get('disconnect_v1_lm_L6_excitatory_projections', False), '')
+    absl.flags.DEFINE_boolean('realistic_neurons_ratio', flags_dict.get('realistic_neurons_ratio', True), '')
+    absl.flags.DEFINE_boolean('train_recurrent_v1', flags_dict.get('train_recurrent_v1', False), '')
+    absl.flags.DEFINE_boolean('train_recurrent_lm', flags_dict.get('train_recurrent_lm', False), '')
+    absl.flags.DEFINE_boolean('train_input', flags_dict.get('train_input', False), '')
+    absl.flags.DEFINE_boolean('train_interarea', flags_dict.get('train_interarea', False), '')
+    absl.flags.DEFINE_boolean('train_noise', flags_dict.get('train_noise', False), '')
+    absl.flags.DEFINE_boolean('connected_selection', flags_dict.get('connected_selection', True), '')
+    absl.flags.DEFINE_boolean('neuron_output', flags_dict.get('neuron_output', True), '')
+    absl.flags.DEFINE_boolean('hard_only', flags_dict.get('hard_only', False), '')
+    absl.flags.DEFINE_boolean('visualize_test', flags_dict.get('visualize_test', False), '')
+    absl.flags.DEFINE_boolean('pseudo_gauss', flags_dict.get('pseudo_gauss', False), '')
+    absl.flags.DEFINE_boolean('bmtk_compat_lgn', flags_dict.get('bmtk_compat_lgn', True), '')
 
     absl.app.run(main)

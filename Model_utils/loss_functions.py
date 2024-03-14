@@ -103,6 +103,7 @@ class SpikeRateDistributionTarget:
     def process_neuropixels_data(self, path=''):
         # Load data
         neuropixels_data_path = f'/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Neuropixels_data/cortical_metrics_1.4.csv'
+        df_all = pd.read_csv(neuropixels_data_path, sep=" ")
         billeh_to_neuropixels_area_mapping = {'v1':'VISp', 'lm':'VISl'}
         # Exc and PV have sufficient number of cells, so we'll filter out non-V1 Exc and PV.
         # SST and VIP are small populations, so let's keep also non-V1 neurons

@@ -164,10 +164,10 @@ def main(_):
 
     print('Restoring checkpoint...')
     print(model.trainable_variables)
-    checkpoint_directory = "Simulation_results/v1_10000_lm_1426/b_8bga"
-    checkpoint_prefix = os.path.join(checkpoint_directory, "ckpt")
-    checkpoint = tf.train.Checkpoint(model=model)
-    checkpoint.restore(tf.train.latest_checkpoint(checkpoint_directory)).assert_consumed()
+    # checkpoint_directory = "Simulation_results/v1_10000_lm_1426/b_8bga"
+    # checkpoint_prefix = os.path.join(checkpoint_directory, "ckpt")
+    # checkpoint = tf.train.Checkpoint(model=model)
+    # checkpoint.restore(tf.train.latest_checkpoint(checkpoint_directory)).assert_consumed()
     print('Checkpoint restored!')
     print(model.trainable_variables)
 
