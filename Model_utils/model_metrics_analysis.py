@@ -300,8 +300,8 @@ class MetricsBoxplot:
 
         self.osi_dfs.append(self.get_osi_dsi_df(metric_file=metrics_df, data_source_name="V1/LM GLIF model", data_dir=self.save_dir))
         self.osi_dfs.append(self.get_osi_dsi_df(metric_file=f"{self.area}_OSI_DSI_DF.csv", data_source_name="Neuropixels", data_dir='Neuropixels_data'))
-        if self.area == 'v1':
-            self.osi_dfs.append(self.get_osi_dsi_df(metric_file=f"v1_OSI_DSI_DF.csv", data_source_name="Billeh et al (2020)", data_dir='Billeh_column_metrics'))
+        # if self.area == 'v1':
+        #     self.osi_dfs.append(self.get_osi_dsi_df(metric_file=f"v1_OSI_DSI_DF.csv", data_source_name="Billeh et al (2020)", data_dir='Billeh_column_metrics'))
             # self.osi_dfs.append(self.get_osi_dsi_df(metric_file=f"{self.area}_OSI_DSI_DF_pop_name.csv", data_source_name="NEST simulation", data_dir='NEST_metrics'))
         
         df = pd.concat(self.osi_dfs, ignore_index=True)
