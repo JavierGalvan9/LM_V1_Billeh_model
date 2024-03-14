@@ -102,7 +102,7 @@ class SpikeRateDistributionTarget:
 
     def process_neuropixels_data(self, path=''):
         # Load data
-        neuropixels_data_path = f'/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Neuropixels_data/cortical_metrics_1.4.csv'
+        neuropixels_data_path = f'LM_V1_Billeh_model/Neuropixels_data/cortical_metrics_1.4.csv'
         df_all = pd.read_csv(neuropixels_data_path, sep=" ")
         billeh_to_neuropixels_area_mapping = {'v1':'VISp', 'lm':'VISl'}
         # Exc and PV have sufficient number of cells, so we'll filter out non-V1 Exc and PV.
@@ -117,7 +117,7 @@ class SpikeRateDistributionTarget:
         df.loc[(df["height_rf"] > 100), "height_rf"] = np.nan
 
         # Save the processed table
-        df.to_csv(f'/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Neuropixels_data/{self._area}_OSI_DSI_DF.csv', sep=" ", index=False)
+        df.to_csv(f'LM_V1_Billeh_model/Neuropixels_data/{self._area}_OSI_DSI_DF.csv', sep=" ", index=False)
         return df
 
     def get_neuropixels_firing_rates(self):
@@ -128,7 +128,7 @@ class SpikeRateDistributionTarget:
             dict: Dictionary containing rates and node_type_ids for each population query.
         """
         # Load data
-        neuropixels_data_path = f'/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Neuropixels_data/{self._area}_OSI_DSI_DF.csv'
+        neuropixels_data_path = f'LM_V1_Billeh_model/Neuropixels_data/{self._area}_OSI_DSI_DF.csv'
         if not os.path.exists(neuropixels_data_path):
             np_df = self.process_neuropixels_data(path=neuropixels_data_path)
         else:
