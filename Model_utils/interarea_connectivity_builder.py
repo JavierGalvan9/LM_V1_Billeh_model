@@ -19,7 +19,7 @@ def intersomatic_distance(sources_projected_x, targets_x, sources_projected_z, t
 
 @njit
 def gaussian_decay(r, a, sigma):
-    return a*np.exp(-(r/sigma)**2)
+    return a*np.exp(-(r**2/(2*sigma**2)))
 
 
 @njit
@@ -377,6 +377,12 @@ class InterareaConnectivity:
                         synaptic_weights, synaptic_delays, receptor_ids = self.assign_weight_and_delay(source, target,
                                                                                                         src_tf_ids, tgt_tf_ids,
                                                                                                         nsyns_ret)
+                        synaptic_weights = 0.2*synaptic_weights
+                    elif self.interarea_weight_distribution == 'zero_weights':
+                        synaptic_weights, synaptic_delays, receptor_ids = self.assign_weight_and_delay(source, target,
+                                                                                                        src_tf_ids, tgt_tf_ids,
+                                                                                                        nsyns_ret)
+                        synaptic_weights = np.zeros(n_connections)                                                                                                                                          
                     elif self.interarea_weight_distribution == 'disconnected':
                         synaptic_weights = np.zeros(n_connections)
                         synaptic_delays = np.ones(n_connections)  
