@@ -21,7 +21,6 @@ def intersomatic_distance(sources_projected_x, targets_x, sources_projected_z, t
 def gaussian_decay(r, a, sigma):
     return a*np.exp(-(r**2/(2*sigma**2)))
 
-
 @njit
 def cart2pol(x, y):
     rho = np.sqrt(x**2 + y**2)
@@ -46,7 +45,7 @@ def node_type_id_to_pop_name(data_dir='GLIF_network'):
 
 class InterareaConnectivity:
     def __init__(self, target_network, source_network, target_column_name,
-                 source_column_name, interarea_weight_distribution='billeh_like', seed=42,
+                 source_column_name, interarea_weight_distribution='billeh_weights', seed=42,
                  data_dir='GLIF_network'):
         self.target_network = target_network
         self.source_network = source_network
@@ -373,11 +372,11 @@ class InterareaConnectivity:
                         # mean and std were got from fitting recurrent weights within a column
                         random_weights = self.rd.randn(n_connections*10) + 10
                         random_weights = random_weights[random_weights > 0]
-                    elif self.interarea_weight_distribution == 'billeh_like':
+                    elif self.interarea_weight_distribution == 'billeh_weights':
                         synaptic_weights, synaptic_delays, receptor_ids = self.assign_weight_and_delay(source, target,
                                                                                                         src_tf_ids, tgt_tf_ids,
                                                                                                         nsyns_ret)
-                        synaptic_weights = 0.2*synaptic_weights
+                        synaptic_weights = 0.1*synaptic_weights
                     elif self.interarea_weight_distribution == 'zero_weights':
                         synaptic_weights, synaptic_delays, receptor_ids = self.assign_weight_and_delay(source, target,
                                                                                                         src_tf_ids, tgt_tf_ids,
