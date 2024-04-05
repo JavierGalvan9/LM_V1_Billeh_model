@@ -78,7 +78,7 @@ def main(_):
     if logdir == '':
         flag_str = f'v1_{v1_neurons}_lm_{lm_neurons}'
         for name, value in flags.flag_values_dict().items():
-            if value != flags[name].default and name in ['learning_rate', 'rate_cost', 'voltage_cost', 'osi_cost', 'temporal_f', 'n_input', 'seq_len']:
+            if value != flags[name].default and name in ['n_input', 'seq_len', 'interarea_weight_distribution', 'E4_weight_factor']:
                 flag_str += f'_{name}_{value}'
         # Define flag string as the second part of results_path
         results_dir = f'{flags.results_dir}/{flag_str}'
@@ -233,11 +233,10 @@ def main(_):
 
         print('Starting to plot OSI and DSI...')
         sim_duration = (2500//flags.seq_len + 1) * flags.seq_len
-        n_trials_per_angle = 1
         v1_spikes = np.zeros((8, sim_duration, networks['v1']['n_nodes']), dtype=float)
         lm_spikes = np.zeros((8, sim_duration, networks['lm']['n_nodes']), dtype=float)
         DG_angles = np.arange(0, 360, 45)
-        for trial_id in range(n_trials_per_angle):
+        for trial_id in range(flags.n_trials_per_angle):
             test_it = iter(osi_dsi_data_set)
             for angle_id, angle in enumerate(range(0, 360, 45)):
                 t0 = time()
@@ -255,7 +254,7 @@ def main(_):
                     lgn_spikes = x[:, :2500, :].numpy()
                     z_v1 = v1_spikes[:, :2500, :]
                     z_lm = lm_spikes[:, :2500, :]
-                    images_dir = os.path.join(flags.ckpt_dir, "OSI_DSI_checkpoints", 'Raster_plots_OSI_DSI')
+                    images_dir = os.path.join(logdir, "OSI_DSI_checkpoints", 'Raster_plots_OSI_DSI')
                     os.makedirs(images_dir, exist_ok=True)
                     graph = InputActivityFigure(
                                                 networks,
@@ -270,20 +269,20 @@ def main(_):
                                                 )
                     graph(lgn_spikes, z_v1, z_lm)
 
-                print(f'Trial {trial_id+1}/{n_trials_per_angle} - Angle {angle} done.')
+                print(f'Trial {trial_id+1}/{flags.n_trials_per_angle} - Angle {angle} done.')
                 print(f'    Trial running time: {time() - t0:.2f}s')
                 mem_data = printgpu(verbose=1)
                 print(f'    Memory consumption (current - peak): {mem_data[0]:.2f} GB - {mem_data[1]:.2f} GB\n')
 
 
         # Average the spikes over the number of trials
-        v1_spikes = v1_spikes/n_trials_per_angle
+        v1_spikes = v1_spikes/flags.n_trials_per_angle
         v1_spikes = v1_spikes[:, :2500, :]
-        lm_spikes = lm_spikes/n_trials_per_angle
+        lm_spikes = lm_spikes/flags.n_trials_per_angle
         lm_spikes = lm_spikes[:, :2500, :]
 
         # Do the OSI/DSI analysis       
-        boxplots_dir = os.path.join(flags.ckpt_dir, "OSI_DSI_checkpoints", 'Boxplots_OSI_DSI')
+        boxplots_dir = os.path.join(logdir, "OSI_DSI_checkpoints", 'Boxplots_OSI_DSI')
         os.makedirs(boxplots_dir, exist_ok=True)
         for spikes, area in zip([v1_spikes, lm_spikes], ['v1', 'lm']):
             metrics_analysis = ModelMetricsAnalysis(networks[area], data_dir=flags.data_dir,
@@ -301,7 +300,7 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_string('results_dir', _results_dir, '')
     absl.app.flags.DEFINE_string('restore_from', '', '')
     absl.app.flags.DEFINE_string('comment', '', '')
-    absl.app.flags.DEFINE_string('interarea_weight_distribution', 'billeh_like', '')
+    absl.app.flags.DEFINE_string('interarea_weight_distribution', 'billeh_weights', '')
     absl.app.flags.DEFINE_string('delays', '100,0', '')
 
     absl.app.flags.DEFINE_float('learning_rate', .01, '')
@@ -338,6 +337,7 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_integer('validation_examples', 16, '')
     absl.app.flags.DEFINE_integer('seed', 3000, '')
     absl.app.flags.DEFINE_integer('neurons_per_output', 16, '')
+    absl.app.flags.DEFINE_integer('n_trials_per_angle', 5, '')
 
     absl.app.flags.DEFINE_boolean('float16', False, '')
     absl.app.flags.DEFINE_boolean('caching', True, '')
