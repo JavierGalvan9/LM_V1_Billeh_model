@@ -71,7 +71,7 @@ class InputActivityFigure:
 
         self.tightened = True  # False
         self.scale = scale
-        self.networks = networks
+        # self.networks = networks
         # self.n_neurons = self.networks['v1']['n_nodes'] + \
         #     self.networks['lm']['n_nodes']
         self.batch_ind = batch_ind
@@ -269,14 +269,12 @@ class LaminarPlot:
             true_node_type_ids = node_type_ids[self.core_mask]
 
         # Now order the pop_names according to their layer and type
-        pop_orders = dict(
-            sorted(node_type_id_to_pop_name.items(), key=lambda item: pop_ordering(item[1]))
-            )
+        pop_orders = dict(sorted(node_type_id_to_pop_name.items(), key=lambda item: pop_ordering(item[1])))
         reversed_pop_orders = {model_name_to_cell_type(v): [] for k, v in pop_orders.items()}
         for k, v in pop_orders.items():
             reversed_pop_orders[model_name_to_cell_type(v)].append(k)
 
-        # Now we convert the neuroon id (related to its pop_name) to an index related to its position in the y axis
+        # Now we convert the neuron id (related to its pop_name) to an index related to its position in the y axis
         # rest 1 to check at the end if every neuron has an index
         neuron_id_to_y = np.zeros(self.n_neurons, np.int32) - 1
         current_ind = 0
@@ -297,9 +295,11 @@ class LaminarPlot:
             pop_y_positions = np.arange(current_ind, current_ind + _n)
             tuning_angles = network['tuning_angle'][self.core_mask][sel]
             sorted_indices = np.argsort(tuning_angles)
-            pop_y_positions = pop_y_positions[sorted_indices]
-            # order the neurons by type in the y axis
-            neuron_id_to_y[sel] = pop_y_positions
+            # Correctly map the sorted y positions to the selected neurons
+            # Convert boolean mask 'sel' to indices
+            sel_indices = np.where(sel)[0]
+            # Assign y positions based on sorted order
+            neuron_id_to_y[sel_indices[sorted_indices]] = pop_y_positions
 
             if int(pop_name[1]) > int(current_pop_name[1]):
                 # register the change of layer
@@ -532,40 +532,49 @@ class LGN_sample_plot:
 
 
 class PopulationActivity:
-    def __init__(self, orientation, frequency, n_neurons, network, image_path):
-        self.data_dir = 'GLIF_network'
-        self.orientation = orientation
-        self.frequency = frequency
+    def __init__(self, n_neurons, network, stimuli_init_time=50, stimuli_end_time=550, 
+                 data_dir='GLIF_network', image_path='', filename=''):
+        self.data_dir = data_dir
         self.n_neurons = n_neurons
         self.network = network
+        self.stimuli_init_time = stimuli_init_time
+        self.stimuli_end_time = stimuli_end_time
+        self.filename = filename
         self.images_path = image_path
         os.makedirs(self.images_path, exist_ok=True)
 
-    def __call__(self, spikes, bin_size=10):
-        self.spikes = np.array(spikes)[0]
+    def __call__(self, spikes, area='v1', plot_core_only=True, bin_size=10):
+        if plot_core_only:
+            core_neurons = 51978 if area == 'v1' else 7414
+            if self.n_neurons > core_neurons:
+                self.n_neurons = core_neurons
+                self.core_mask = other_billeh_utils.isolate_core_neurons(self.network, n_selected_neurons=core_neurons, data_dir=self.data_dir)
+            else:
+                self.core_mask = np.full(self.n_neurons, True)
+        else:
+            self.core_mask = np.full(self.n_neurons, True)
+
+        self.spikes = np.array(spikes)[0, :, self.core_mask]
+        self.spikes = np.transpose(self.spikes)
         self.neurons_ordering()
-        self.plot_populations_activity(bin_size)
+        # self.plot_populations_activity(bin_size)
         self.subplot_populations_activity(bin_size)
 
     def neurons_ordering(self):
-        node_types = pd.read_csv(os.path.join(
-            self.data_dir, 'network/v1_node_types.csv'), sep=' ')
+        node_types = pd.read_csv(os.path.join(self.data_dir, 'network/v1_node_types.csv'), sep=' ')
         path_to_h5 = os.path.join(self.data_dir, 'network/v1_nodes.h5')
-        node_h5 = h5py.File(path_to_h5, mode='r')
-        node_type_id_to_pop_name = dict()
-        for nid in np.unique(node_h5['nodes']['v1']['node_type_id']):
-            # if not np.unique all of the 230924 model neurons ids are considered,
-            # but nearly all of them are repeated since there are only 111 different indices
-            ind_list = np.where(node_types.node_type_id == nid)[0]
-            assert len(ind_list) == 1
-            node_type_id_to_pop_name[nid] = node_types.pop_name[ind_list[0]]
 
-        node_type_ids = np.array(node_h5['nodes']['v1']['node_type_id'])
-        # Select population names of neurons in the present network (core)
-        true_node_type_ids = node_type_ids[self.network['tf_id_to_bmtk_id']]
+        with h5py.File(path_to_h5, mode='r') as node_h5:
+            # Create mapping from node_type_id to pop_name
+            node_types.set_index('node_type_id', inplace=True)
+            node_type_id_to_pop_name = node_types['pop_name'].to_dict()
+
+            # Map node_type_id to pop_name for all neurons and select population names of neurons in the present network 
+            node_type_ids = node_h5['nodes']['v1']['node_type_id'][()][self.network['tf_id_to_bmtk_id']]
+            true_node_type_ids = node_type_ids[self.core_mask]
+        
         # Now order the pop_names according to their layer and type
-        pop_orders = dict(sorted(node_type_id_to_pop_name.items(),
-                          key=lambda item: pop_ordering(item[1])))
+        pop_orders = dict(sorted(node_type_id_to_pop_name.items(), key=lambda item: pop_ordering(item[1])))
 
         # Now we convert the neuroon id (related to its pop_name) to an index related to its position in the y axis
         # rest 1 to check at the end if every neuron has an index
@@ -594,13 +603,11 @@ class PopulationActivity:
         assert np.sum(neuron_id_to_y < 0) == 0
         self.y_to_neuron_id = np.zeros(self.n_neurons, np.int32)
         self.y_to_neuron_id[neuron_id_to_y] = np.arange(self.n_neurons)
-        assert np.all(
-            self.y_to_neuron_id[neuron_id_to_y] == np.arange(self.n_neurons))
+        assert np.all(self.y_to_neuron_id[neuron_id_to_y] == np.arange(self.n_neurons))
 
     def plot_populations_activity(self, bin_size=10):
         layers_label = ['i1', 'i23', 'e23', 'i4', 'e4', 'i5', 'e5', 'i6', 'e6']
-        neuron_class_bounds = np.concatenate(
-            (self.ie_bounds, self.layer_bounds))
+        neuron_class_bounds = np.concatenate((self.ie_bounds, self.layer_bounds))
         neuron_class_bounds = np.append(neuron_class_bounds, self.n_neurons)
         neuron_class_bounds.sort()
 
@@ -617,23 +624,20 @@ class PopulationActivity:
             population_activity = n_spikes_bin/(n_neurons_class*bin_size*0.001)
 
             fig = plt.figure()
-            plt.plot(
-                np.arange(0, self.spikes.shape[0], bin_size), population_activity)
+            plt.plot(np.arange(0, self.spikes.shape[0], bin_size), population_activity)
             plt.xlabel('Time (ms)')
             plt.ylabel('Population activity (Hz)')
             plt.suptitle(f'Population activity of {label} neurons')
             path = os.path.join(self.images_path, 'Populations activity')
             os.makedirs(path, exist_ok=True)
             fig.tight_layout()
-            fig.savefig(os.path.join(
-                path, f'{label}_population_activity.png'), dpi=300)
+            fig.savefig(os.path.join(path, f'{label}_population_activity.png'), dpi=300)
 
     def subplot_populations_activity(self, bin_size=10):
         layers_label = ['Inhibitory L1 neurons', 'Inhibitory L23 neurons', 'Excitatory L23 neurons',
                         'Inhibitory L4 neurons', 'Excitatory L4 neurons', 'Inhibitory L5 neurons',
                         'Excitatory L5 neurons', 'Inhibitory L6 neurons', 'Excitatory L6 neurons']
-        neuron_class_bounds = np.concatenate(
-            (self.ie_bounds, self.layer_bounds))
+        neuron_class_bounds = np.concatenate((self.ie_bounds, self.layer_bounds))
         neuron_class_bounds = np.append(neuron_class_bounds, self.n_neurons)
         neuron_class_bounds.sort()
 
@@ -647,8 +651,7 @@ class PopulationActivity:
             class_spikes = self.spikes[:, neuron_ids]
             m, n = class_spikes.shape
             H, W = int(m/bin_size), 1  # block-size
-            n_spikes_bin = class_spikes.reshape(
-                H, m//H, W, n//W).sum(axis=(1, 3))
+            n_spikes_bin = class_spikes.reshape(H, m//H, W, n//W).sum(axis=(1, 3))
             population_activity = n_spikes_bin/(n_neurons_class*bin_size*0.001)
             population_activity_dict[label] = population_activity
 
@@ -656,17 +659,14 @@ class PopulationActivity:
         fig = plt.figure(constrained_layout=False)
         # fig.set_constrained_layout_pads(w_pad=4 / 72, h_pad=4 / 72, hspace=0.15, wspace=0.15)
         ax1 = plt.subplot(5, 1, 1)
-        plt.plot(
-            time, population_activity_dict['Inhibitory L1 neurons'], label='Inhibitory L1 neurons', color='b')
+        plt.plot(time, population_activity_dict['Inhibitory L1 neurons'], label='Inhibitory L1 neurons', color='b')
         plt.legend(fontsize=6)
         plt.tick_params(axis='both', labelsize=7)
         # plt.xlabel('Time (ms)', fontsize=7)
         plt.setp(ax1.get_xticklabels(), visible=False)
         plt.ylabel('Population \n activity (Hz)', fontsize=7)
-        plt.axvline(500, linestyle='dashed',
-                    color='gray', linewidth=1, zorder=10)
-        plt.axvline(1500, linestyle='dashed',
-                    color='gray', linewidth=1, zorder=10)
+        plt.axvline(self.stimuli_init_time, linestyle='dashed', color='gray', linewidth=1, zorder=10)
+        plt.axvline(self.stimuli_end_time, linestyle='dashed', color='gray', linewidth=1, zorder=10)
 
         ax2 = None
         for i in range(3, 9):
@@ -678,9 +678,9 @@ class PopulationActivity:
                 plt.setp(ax1.get_xticklabels(), visible=False)
                 plt.legend(fontsize=6, loc='upper right')
                 plt.tick_params(axis='both', labelsize=7)
-                plt.axvline(500, linestyle='dashed',
+                plt.axvline(self.stimuli_init_time, linestyle='dashed',
                             color='gray', linewidth=1, zorder=10)
-                plt.axvline(1500, linestyle='dashed',
+                plt.axvline(self.stimuli_end_time, linestyle='dashed',
                             color='gray', linewidth=1, zorder=10)
             else:
                 if ax2 == None:
@@ -692,32 +692,30 @@ class PopulationActivity:
                 plt.setp(ax2.get_xticklabels(), visible=False)
                 plt.legend(fontsize=6, loc='upper right')
                 plt.tick_params(axis='both', labelsize=7)
-                plt.axvline(500, linestyle='dashed',
+                plt.axvline(self.stimuli_init_time, linestyle='dashed',
                             color='gray', linewidth=1, zorder=10)
-                plt.axvline(1500, linestyle='dashed',
+                plt.axvline(self.stimuli_end_time, linestyle='dashed',
                             color='gray', linewidth=1, zorder=10)
 
         ax1 = plt.subplot(5, 2, 9, sharex=ax1, sharey=ax1)
-        plt.plot(
-            time, population_activity_dict[layers_label[7]], label=layers_label[7], color='b')
+        plt.plot(time, population_activity_dict[layers_label[7]], label=layers_label[7], color='b')
         plt.ylabel('Population \n activity (Hz)', fontsize=7)
         plt.xlabel('Time [ms]', fontsize=7)
         plt.tick_params(axis='both', labelsize=7)
         plt.legend(fontsize=6, loc='upper right')
-        plt.axvline(500, linestyle='dashed',
+        plt.axvline(self.stimuli_init_time, linestyle='dashed',
                     color='gray', linewidth=1, zorder=10)
-        plt.axvline(1500, linestyle='dashed',
+        plt.axvline(self.stimuli_end_time, linestyle='dashed',
                     color='gray', linewidth=1, zorder=10)
 
         ax2 = plt.subplot(5, 2, 10, sharex=ax2, sharey=ax2)
-        plt.plot(
-            time, population_activity_dict[layers_label[8]], label=layers_label[8], color='r')
+        plt.plot(time, population_activity_dict[layers_label[8]], label=layers_label[8], color='r')
         plt.xlabel('Time [ms]', fontsize=7)
         plt.tick_params(axis='both', labelsize=7)
         plt.legend(fontsize=6, loc='upper right')
-        plt.axvline(500, linestyle='dashed',
+        plt.axvline(self.stimuli_init_time, linestyle='dashed',
                     color='gray', linewidth=1, zorder=10)
-        plt.axvline(1500, linestyle='dashed',
+        plt.axvline(self.stimuli_end_time, linestyle='dashed',
                     color='gray', linewidth=1, zorder=10)
 
         plt.subplots_adjust(left=0.1,
@@ -727,10 +725,9 @@ class PopulationActivity:
                             wspace=0.17,
                             hspace=0.17)
 
+        # fig.tight_layout()
         path = os.path.join(self.images_path, 'Populations activity')
         os.makedirs(path, exist_ok=True)
-        # fig.tight_layout()
-        fig.savefig(os.path.join(
-            path, 'subplot_population_activity.png'), dpi=300)
+        fig.savefig(os.path.join(path, f'{self.filename}.png'), dpi=300)
         plt.close(fig)
 
