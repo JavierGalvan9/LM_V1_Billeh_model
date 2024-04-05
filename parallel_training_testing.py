@@ -18,11 +18,12 @@ parser.add_argument('--data_dir', default='GLIF_network', type=str)
 parser.add_argument('--results_dir', default='Simulation_results', type=str)
 parser.add_argument('--restore_from', default='', type=str)
 parser.add_argument('--comment', default='', type=str)
-parser.add_argument('--interarea_weight_distribution', default='billeh_like', type=str)
+parser.add_argument('--interarea_weight_distribution', default='billeh_weights', type=str)
+# parser.add_argument('--interarea_weight_distribution', default='zero_weights', type=str)
 parser.add_argument('--delays', default='100,0', type=str)
 
 parser.add_argument('--learning_rate', default=0.01, type=float)
-parser.add_argument('--rate_cost', default=0., type=float) #100
+parser.add_argument('--rate_cost', default=100., type=float) #100
 parser.add_argument('--voltage_cost', default=.00001, type=float)
 parser.add_argument('--osi_cost', default=1., type=float)
 
@@ -68,7 +69,7 @@ parser.add_argument('--realistic_neurons_ratio', default=True, action='store_tru
 parser.add_argument('--train_recurrent_v1', default=False, action='store_true')
 parser.add_argument('--train_recurrent_lm', default=False, action='store_true')
 parser.add_argument('--train_input', default=False, action='store_true')
-parser.add_argument('--train_interarea', default=True, action='store_true')
+parser.add_argument('--train_interarea', default=False, action='store_true')
 parser.add_argument('--train_noise', default=False, action='store_true')
 
 parser.add_argument('--connected_selection', default=True, action='store_true')
@@ -112,7 +113,7 @@ def main():
     # Save the configuration of the model based on the main features
     flag_str = f'v1_{v1_neurons}_lm_{lm_neurons}'
     for name, value in vars(flags).items():
-        if value != parser.get_default(name) and name in ['learning_rate', 'rate_cost', 'voltage_cost', 'osi_cost', 'temporal_f', 'n_input', 'seq_len']:
+        if value != parser.get_default(name) and name in ['n_input', 'seq_len', 'interarea_weight_distribution', 'E4_weight_factor']:
             flag_str += f'_{name}_{value}'
 
     # Define flag string as the second part of results_path
@@ -162,6 +163,7 @@ def main():
             job_id = submit_job(new_training_command)
         else:
             new_training_command = training_commands + ['-d', job_ids[i-1], "-o", f"Out/train_{i}_{v1_neurons}.out", "-e", f"Error/train_{i}_{v1_neurons}.err", "-j", f"train_{i}_{v1_neurons}"]
+            # new_training_script = training_script + f"--osi_cost 0.1 --rate_cost 10 --seed {flags.seed + i} --ckpt_dir {logdir} --run_session {i}"
             new_training_script = training_script + f"--seed {flags.seed + i} --ckpt_dir {logdir} --run_session {i}"
             new_training_command = new_training_command + [new_training_script]
             job_id = submit_job(new_training_command)

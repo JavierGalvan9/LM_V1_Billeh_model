@@ -550,7 +550,7 @@ def load_billeh(flags, n_neurons, flag_str=''):
         # networks['lm']['synapses']['weights'][L4_e_rec_exc_edges_mask] *= flags.E4_weight_factor
 
         ### Increase interarea weights to E4 in lm
-        inter_target_indices = networks['lm']['interarea_synapses']['v1']['indices'][:, 0] // 4
+        inter_target_indices = networks['lm']['interarea_synapses']['v1']['indices'][:, 0] 
         # Get the interarea excitatory projections to lm e4 neurons
         L4_e_inter_exc_edges_mask =  np.logical_and(np.isin(inter_target_indices, L4_e_ids), networks['lm']['interarea_synapses']['v1']['weights'] > 0)
         # Increase the weight of the excitatory interarea projections to lm e4 neurons
@@ -577,7 +577,7 @@ def load_billeh(flags, n_neurons, flag_str=''):
         # Get the indices of the lm L6 neurons
         L6_e_ids = networks['lm']['laminar_indices']['L6_e']
         ### Increase interarea weights to E4 in lm
-        inter_target_indices = networks['lm']['interarea_synapses']['v1']['indices'][:, 0] // 4
+        inter_target_indices = networks['lm']['interarea_synapses']['v1']['indices'][:, 0] 
         # Get the interarea excitatory projections to lm e4 neurons
         L6_e_inter_exc_edges_mask =  np.logical_and(np.isin(inter_target_indices, L6_e_ids), networks['lm']['interarea_synapses']['v1']['weights'] > 0)
         # Increase the weight of the excitatory interarea projections to lm e4 neurons

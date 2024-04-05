@@ -152,7 +152,7 @@ class BackgroundNoiseLayer(tf.keras.layers.Layer):
 
         self._bkg_weights = {'v1': None, 'lm': None}
         self._bkg_weights['v1'] = cell.v1.bkg_input_weights #(4000,)
-        self._bkg_weights['lm'] = cell.lm.bkg_input_weights #(600,)
+        self._bkg_weights['lm'] = cell.lm.bkg_input_weights #* 1.2 #(600,)
 
         self._bkg_indices = {'v1': None, 'lm': None}
         self._bkg_indices['v1'] = cell.v1.bkg_input_indices
@@ -183,6 +183,7 @@ class BackgroundNoiseLayer(tf.keras.layers.Layer):
         # rest_of_brain = tf.cast(tf.random.uniform(
         #         (self._batch_size, self._seq_len, self._n_bkg_units)) < self._bkg_firing_rate * .001, 
         #         self._compute_dtype) # (1, 3000, 1)
+
 
         rest_of_brain = tf.random.poisson(shape=(self._batch_size, self._seq_len, self._n_bkg_units), 
                                         lam=self._bkg_firing_rate/1000, 
@@ -559,8 +560,13 @@ class BillehColumn(tf.keras.layers.Layer):
             bkg_input["receptor_ids"],
             bkg_input["delays"]
         )
-
+        # print('Lokk:')
+        # print(bkg_input_weights)
+        # print(voltage_scale)
+        # print(self._node_type_ids)
+        # print(bkg_input_indices[:, 0])
         bkg_input_weights = (bkg_input_weights/voltage_scale[self._node_type_ids[bkg_input_indices[:, 0]]])
+        # print(bkg_input_weights)
         bkg_input_delays = np.round(np.clip(bkg_input_delays, dt, self.max_delay)/dt).astype(np.int32)
         # Introduce the delays in the postsynaptic neuron indices
         # bkg_input_indices[:, 1] = bkg_input_indices[:, 1] + self._n_neurons * (bkg_input_delays - 1)
@@ -578,6 +584,7 @@ class BillehColumn(tf.keras.layers.Layer):
             trainable=train_noise,
             dtype=self._compute_dtype
         )
+        # print(self.bkg_input_weights)
 
         print(f"    > # BKG input synapses {len(bkg_input_indices)}")
         del bkg_input_indices, bkg_input_weights, bkg_input_receptor_ids, bkg_input_delays
@@ -711,8 +718,8 @@ class BillehColumn(tf.keras.layers.Layer):
             inds = tf.sort(all_inds)
             remaining_pre = tf.gather(pre_inds, inds)
             _, idx = tf.unique(remaining_pre, out_idx=tf.int64)
-            if tf.size(inds) == 0:
-                tf.print('OJITO: ', tf.size(inds))
+            # if tf.size(inds) == 0:
+            #     tf.print('OJITO: ', tf.size(inds))
             new_pre = tf.gather(idx, tf.range(tf.size(inds)))
             new_post = tf.gather(post_inds, inds)
             new_indices = tf.stack((new_post, new_pre), axis=1)
@@ -1207,7 +1214,7 @@ def create_model(networks,
 
     if use_state_input:
         many_input_model = tf.keras.Model(
-            inputs=[x, state_input_holder, initial_state_holder], outputs=[abstract_output, completed_output])
+            inputs=[x, state_input_holder, initial_state_holder], outputs=[abstract_output, completed_output, bkg_inputs])
         # many_input_model = tf.keras.Model(
         #     inputs=[x, state_input_holder, initial_state_holder], 
         #     outputs=mean_output
