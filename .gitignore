@@ -6,10 +6,12 @@ Simulation_results
 Metrics_analysis
 load_sparse_profiling.ipynb
 pruebas.ipynb
+new_pruebas.ipynb
 *__pycache__*
 .ipynb_checkpoint*
 Model_utils/.cache
 Model_utils/Other
 lgn_model/data
-Current_model
+Benchmark_models
 borrar.py
+Time_to_first_spike_analysis

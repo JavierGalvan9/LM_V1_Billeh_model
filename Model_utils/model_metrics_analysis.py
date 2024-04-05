@@ -74,6 +74,7 @@ def calculate_OSI_DSI(rates_df, network, DG_angles=range(0,360, 45), n_selected_
     osi_df["preferred_angle"] = preferred_DG_angle
     osi_df["max_mean_rate(Hz)"] = preferred_rates
     osi_df["Ave_Rate(Hz)"] = average_rates
+    osi_df['firing_rate_sp'] = average_rates
 
     if remove_zero_rate_neurons:
         osi_df = osi_df[osi_df["Ave_Rate(Hz)"] != 0]
@@ -83,7 +84,7 @@ def calculate_OSI_DSI(rates_df, network, DG_angles=range(0,360, 45), n_selected_
 
 class ModelMetricsAnalysis:    
 
-    def __init__(self, network, data_dir='GLIF_network', directory='', filename='', n_trials=1, drifting_gratings_init=50, 
+    def __init__(self, network, neuropixels_feature="Ave_Rate(Hz)", data_dir='GLIF_network', directory='', filename='', n_trials=1, drifting_gratings_init=50, 
                  drifting_gratings_end=550, area='v1', analyze_core_only=True):
         self.n_neurons = network['n_nodes']
         self.network = network
@@ -93,6 +94,7 @@ class ModelMetricsAnalysis:
         self.drifting_gratings_init = drifting_gratings_init
         self.drifting_gratings_end = drifting_gratings_end
         self.analyze_core_only = analyze_core_only
+        self.neuropixels_feature = neuropixels_feature
         self.directory = os.path.join(directory, f'{self.area}')
         self.filename = filename
     
@@ -141,12 +143,13 @@ class ModelMetricsAnalysis:
         # firing_rates_df.to_csv(os.path.join(self.save_dir, f"V1_DG_firing_rates_df.csv"), sep=" ", index=False)
 
         # Calculate the orientation and direction selectivity indices
-        metrics_df = calculate_OSI_DSI(firing_rates_df, self.network, DG_angles=DG_angles, n_selected_neurons=n_neurons_plot)
+        metrics_df = calculate_OSI_DSI(firing_rates_df, self.network, DG_angles=DG_angles, n_selected_neurons=n_neurons_plot,
+                                    remove_zero_rate_neurons=True)
         # metrics_df.to_csv(os.path.join(self.directory, f"V1_OSI_DSI_DF.csv"), sep=" ", index=False)
 
         # Make the boxplots to compare with the neuropixels data
         if len(DG_angles) == 1:
-            metrics = ["Ave_Rate(Hz)"]
+            metrics = [self.neuropixels_feature]
         else:
             metrics = ["Rate at preferred direction (Hz)", "OSI", "DSI"]
 
@@ -247,7 +250,7 @@ class MetricsBoxplot:
             )
         return ax   
 
-    def get_osi_dsi_df(self, metric_file="v1_OSI_DSI_DF.csv", data_source_name="", data_dir=""):
+    def get_osi_dsi_df(self, metric_file="v1_OSI_DSI_DF.csv", data_source_name="", feature='', data_dir=""):
         # Load the data csv file and remove rows with empty cell type
         # if metric_file is a dataframe, then do not load it
         if isinstance(metric_file, pd.DataFrame):
@@ -270,12 +273,13 @@ class MetricsBoxplot:
 
         # Rename the maximum rate column
         df.rename(columns={"max_mean_rate(Hz)": "Rate at preferred direction (Hz)"}, inplace=True)
+        df.rename(columns={"firing_rate_sp": "Spontaneous rate (Hz)"}, inplace=True)
         # df.rename(columns={"Ave_Rate(Hz)": "Average rate (Hz)"}, inplace=True)
 
         # Cut off neurons with low firing rate at the preferred direction
-        # nonresponding = df["Rate at preferred direction (Hz)"] < 0.5
-        # df.loc[nonresponding, "OSI"] = np.nan
-        # df.loc[nonresponding, "DSI"] = np.nan
+        nonresponding = df["Rate at preferred direction (Hz)"] < 0.5
+        df.loc[nonresponding, "OSI"] = np.nan
+        df.loc[nonresponding, "DSI"] = np.nan
 
         # Sort the neurons by neuron types
         df = df.sort_values(by="cell_type")
@@ -286,7 +290,7 @@ class MetricsBoxplot:
         else:
             df["data_type"] = data_dir
 
-        columns = ["cell_type", "data_type", "Rate at preferred direction (Hz)", "OSI", "DSI", 'Ave_Rate(Hz)']
+        columns = ["cell_type", "data_type", "Rate at preferred direction (Hz)", "OSI", "DSI", 'Ave_Rate(Hz)', 'Spontaneous rate (Hz)']
         df = df[columns]
 
         return df
@@ -295,8 +299,6 @@ class MetricsBoxplot:
         # Get the dataframes for the model and Neuropixels OSI and DSI 
         if metrics_df is None:
             metrics_df = f"{self.area}_OSI_DSI_DF.csv"
-
-        # print(metrics_df)
 
         self.osi_dfs.append(self.get_osi_dsi_df(metric_file=metrics_df, data_source_name="V1/LM GLIF model", data_dir=self.save_dir))
         self.osi_dfs.append(self.get_osi_dsi_df(metric_file=f"{self.area}_OSI_DSI_DF.csv", data_source_name="Neuropixels", data_dir='Neuropixels_data'))
@@ -330,7 +332,7 @@ class MetricsBoxplot:
         cell_type_order = np.sort(df['cell_type'].unique())
 
         for idx, metric in enumerate(metrics):
-            if metric in ["Rate at preferred direction (Hz)", 'Ave_Rate(Hz)']:
+            if metric in ["Rate at preferred direction (Hz)", 'Ave_Rate(Hz)', 'Spontaneous rate (Hz)']:
                 ylims = [0, 100]
             else:
                 ylims = [0, 1]
@@ -553,6 +555,7 @@ class OneShotTuningAnalysis:
         firing_rates_df['OSI'] = np.nan
         firing_rates_df['DSI'] = np.nan
         firing_rates_df['Ave_Rate(Hz)'] = np.nan
+        firing_rates_df['firing_rate_sp'] = np.nan
 
         # Create an instance of MetricsBoxplot and get OSI and DSI data from a file.
         filename = f'Epoch_{epoch}'
