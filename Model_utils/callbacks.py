@@ -83,6 +83,7 @@ class Callbacks:
         else:
             self.neuropixels_feature = 'Ave_Rate(Hz)'  
         self.model = model
+        self.optimizer = optimizer
         self.flags = flags
         self.logdir = logdir
         self.strategy = strategy
@@ -166,7 +167,7 @@ class Callbacks:
         self.epoch_init_time = time()
         date_str = dt.datetime.now().strftime('%d-%m-%Y %H:%M')
         print(f'Epoch {self.epoch:2d}/{self.total_epochs} @ {date_str}')
-        tf.print(f'\nEpoch {self.epoch:2d}/{self.total_epochs} @ {date_str}')
+        tf.print(f'Epoch {self.epoch:2d}/{self.total_epochs} @ {date_str} - {self.optimizer.lr.numpy()}')
 
     def on_epoch_end(self, x, v1_spikes, lm_spikes, y, metric_values, bkg_noise=None, verbose=True):
         self.step = 0
@@ -174,7 +175,7 @@ class Callbacks:
             self.initial_metric_values = metric_values
         
         if verbose:
-            print_str = '  Validation: \n' 
+            print_str = f'  Validation:  - Angle: {y[0][0]:.2f}\n' 
             val_values = metric_values[len(metric_values)//2:]
             print_str += '    ' + compose_str(val_values) 
             print(print_str)
@@ -193,17 +194,18 @@ class Callbacks:
         self.plot_losses_curves()
 
         if val_loss_value < self.min_val_loss:
+        # if True:
             self.min_val_loss = val_loss_value
             self.no_improve_epochs = 0
             # self.plot_bkg_noise(bkg_noise)
-            self.noise_psc(bkg_noise)
-            self.bkg_correlation_analysis(v1_spikes, lm_spikes, bkg_noise)
-            self.plot_lgn_activity(x)
+            # self.noise_psc(bkg_noise)
+            # self.bkg_correlation_analysis(v1_spikes, lm_spikes, bkg_noise)
+            # self.plot_lgn_activity(x)
             self.save_best_model()
             self.plot_raster(x, v1_spikes, lm_spikes, y)
             self.plot_mean_firing_rate_boxplot(v1_spikes, lm_spikes, y)
             self.plot_tuning_analysis(v1_spikes, lm_spikes, y)
-            self.plot_populations_activity(v1_spikes, lm_spikes)
+            # self.plot_populations_activity(v1_spikes, lm_spikes)
 
             self.model_variables_dict['Best'] = {var.name: var.numpy() for var in self.model.trainable_variables}
             for var in self.model_variables_dict['Best'].keys():
@@ -236,6 +238,8 @@ class Callbacks:
     def on_step_start(self):
         self.step += 1
         self.step_init_time = time()
+        # reset the gpu memory stat
+        tf.config.experimental.reset_memory_stats('GPU:0')
 
     def on_step_end(self, train_values, y, verbose=True):
         self.step_running_time.append(time() - self.step_init_time)
@@ -460,7 +464,7 @@ class Callbacks:
             psc, psc_rise = update_psc(psc, psc_rise, bkg_noise_step)
 
         noise_current = np.array(noise_current)
-        
+
         return noise_current
 
 
@@ -576,7 +580,8 @@ class Callbacks:
         boxplots_dir = os.path.join(self.logdir, f'Boxplots/{variable}')
         os.makedirs(boxplots_dir, exist_ok=True)
         fig = plt.figure(figsize=(12, 6))
-        heatmap = sns.heatmap(pivot_df, cmap='RdBu_r', annot=False, cbar=False, center=0, vmin=global_min, vmax=global_max)
+        # heatmap = sns.heatmap(pivot_df, cmap='RdBu_r', annot=False, cbar=False, center=0, vmin=global_min, vmax=global_max)
+        heatmap = sns.heatmap(pivot_df, cmap='RdBu_r', annot=False, cbar=False, center=0, vmin=-0.5, vmax=0.5)
         plt.xlabel(f'{target_area}')
         plt.ylabel(f'{source_area}')
         plt.xticks(rotation=90)
@@ -596,7 +601,8 @@ class Callbacks:
         pivot_df = grouped_df.pivot(index='Pre_names', columns='Post Name', values='Final weight')
         # Plot heatmap
         plt.figure(figsize=(12, 6))
-        heatmap = sns.heatmap(pivot_df, cmap='RdBu_r', annot=False, cbar=False, center=0, vmin=global_min, vmax=global_max)
+        # heatmap = sns.heatmap(pivot_df, cmap='RdBu_r', annot=False, cbar=False, center=0, vmin=global_min, vmax=global_max)
+        heatmap = sns.heatmap(pivot_df, cmap='RdBu_r', annot=False, cbar=False, center=0, vmin=-0.5, vmax=0.5)
         plt.xlabel(f'{target_area}')
         plt.ylabel(f'{source_area}')
         plt.xticks(rotation=90)
@@ -616,7 +622,8 @@ class Callbacks:
         pivot_df = grouped_df.pivot(index='Pre_names', columns='Post Name', values='Weight Change')
         # Plot heatmap
         plt.figure(figsize=(12, 6))
-        heatmap = sns.heatmap(pivot_df, cmap='RdBu_r', annot=False, cbar=False, center=0)
+        # heatmap = sns.heatmap(pivot_df, cmap='RdBu_r', annot=False, cbar=False, center=0)
+        heatmap = sns.heatmap(pivot_df, cmap='RdBu_r', annot=False, cbar=False, center=0, vmin=-0.5, vmax=0.5)
         plt.xlabel(f'{target_area}')
         plt.ylabel(f'{source_area}')
         plt.xticks(rotation=90)
@@ -630,19 +637,19 @@ class Callbacks:
         plt.savefig(os.path.join(boxplots_dir, f'Weight_change.png'), dpi=300, transparent=False)
         plt.close()
 
-    def get_osi_dsi_dataset_fn(self, regular=False):
-        def _f(input_context):
-            post_delay = self.flags.seq_len - (2500 % self.flags.seq_len)
-            _data_set = stim_dataset.generate_drifting_grating_tuning(
-                seq_len=2500+post_delay,
-                pre_delay=500,
-                post_delay = post_delay,
-                n_input=self.flags.n_input,
-                regular=regular
-            ).batch(1)
+    # def get_osi_dsi_dataset_fn(self, regular=False):
+    #     def _f(input_context):
+    #         post_delay = self.flags.seq_len - (2500 % self.flags.seq_len)
+    #         _data_set = stim_dataset.generate_drifting_grating_tuning(
+    #             seq_len=2500+post_delay,
+    #             pre_delay=500,
+    #             post_delay = post_delay,
+    #             n_input=self.flags.n_input,
+    #             regular=regular
+    #         ).batch(1)
                         
-            return _data_set
-        return _f
+    #         return _data_set
+    #     return _f
     
     def plot_osi_dsi(self, parallel=False):
         print('Starting to plot OSI and DSI...')
@@ -651,18 +658,72 @@ class Callbacks:
             p = self.epoch_manager.save(checkpoint_number=self.epoch)
             print(f'Checkpoint model saved in {p}\n')
         else:              
-            osi_dsi_data_set = self.strategy.distribute_datasets_from_function(self.get_osi_dsi_dataset_fn(regular=True))
+            # osi_dsi_data_set = self.strategy.distribute_datasets_from_function(self.get_osi_dsi_dataset_fn(regular=True))
+            DG_angles = np.arange(0, 360, 45)
+
+            osi_dataset_path = os.path.join('OSI_DSI_dataset', 'lgn_firing_rates.pkl')
+            if not os.path.exists(osi_dataset_path):
+                print('Creating OSI/DSI dataset...')
+                # Define OSI/DSI dataset
+                def get_osi_dsi_dataset_fn(regular=False):
+                    def _f(input_context):
+                        post_delay = flags.seq_len - (2500 % self.flags.seq_len)
+                        _lgn_firing_rates = stim_dataset.generate_drifting_grating_tuning(
+                            seq_len=2500+post_delay,
+                            pre_delay=500,
+                            post_delay = post_delay,
+                            n_input=self.flags.n_input,
+                            regular=regular,
+                            return_firing_rates=True
+                        ).batch(1)
+                                    
+                        return _lgn_firing_rates
+                    return _f
             
+                osi_dsi_data_set = strategy.distribute_datasets_from_function(get_osi_dsi_dataset_fn(regular=True))
+                test_it = iter(osi_dsi_data_set)
+                lgn_firing_rates_dict = {}  # Dictionary to store firing rates
+                for angle_id, angle in enumerate(DG_angles):
+                    t0 = time()
+                    lgn_firing_rates = next(test_it)
+                    lgn_firing_rates_dict[angle] = lgn_firing_rates.numpy()
+                    print(f'Angle {angle} done.')
+                    print(f'    Trial running time: {time() - t0:.2f}s')
+                    mem_data = printgpu(verbose=1)
+                    print(f'    Memory consumption (current - peak): {mem_data[0]:.2f} GB - {mem_data[1]:.2f} GB\n')
+
+                # Save the dataset      
+                results_dir = os.path.join("OSI_DSI_dataset")
+                os.makedirs(results_dir, exist_ok=True)
+                with open(osi_dataset_path, 'wb') as f:
+                    pkl.dump(lgn_firing_rates_dict, f)
+                print('OSI/DSI dataset created successfully!')
+
+            else:
+                # Load the LGN firing rates dataset
+                with open(osi_dataset_path, 'rb') as f:
+                    lgn_firing_rates_dict = pkl.load(f)
+
             sim_duration = (2500//self.flags.seq_len + 1) * self.flags.seq_len
             n_trials_per_angle = 10
             v1_spikes = np.zeros((8, sim_duration, self.networks['v1']['n_nodes']), dtype=float)
             lm_spikes = np.zeros((8, sim_duration, self.networks['lm']['n_nodes']), dtype=float)
-            DG_angles = np.arange(0, 360, 45)
+            
             for trial_id in range(n_trials_per_angle):
-                test_it = iter(osi_dsi_data_set)
+                # test_it = iter(osi_dsi_data_set)
                 for angle_id, angle in enumerate(range(0, 360, 45)):
                     t0 = time()
-                    x, y, _, w = next(test_it)
+                    # Reset the memory stats
+                    tf.config.experimental.reset_memory_stats('GPU:0')
+
+                    lgn_fr = lgn_firing_rates_dict[angle]
+                    lgn_fr = tf.constant(lgn_fr, dtype=tf.float32)
+                    _p = 1 - tf.exp(-lgn_fr / 1000.)
+                    x = tf.random.uniform(tf.shape(_p)) < _p
+                    y = tf.constant(angle, dtype=tf.float32, shape=(1,))
+                    w = tf.constant(sim_duration, dtype=tf.float32, shape=(1,))
+
+                    # x, y, _, w = next(test_it)
                     chunk_size = self.flags.seq_len
                     num_chunks = (2500//chunk_size + 1)
                     for i in range(num_chunks):
