@@ -13,7 +13,7 @@ if version.parse(tf.__version__) < version.parse("2.4.0"):
 else:
     from tensorflow.keras import mixed_precision
 
-from Model_utils import load_sparse, models, other_billeh_utils, stim_dataset
+from Model_utils import load_sparse, models, other_billeh_utils, stim_dataset, full_field_flash_generator
 from Model_utils.plotting_utils import InputActivityFigure
 from general_utils import file_management
 from time import time
@@ -182,12 +182,17 @@ def main(_):
 
         def get_dataset_fn(regular=False):
             def _f(input_context):
-                _data_set = stim_dataset.generate_drifting_grating_tuning(
+                _data_set = full_field_flash_generator.generate_drifting_grating_tuning(
                     seq_len=flags.seq_len,
                     pre_delay=delays[0],
                     post_delay = delays[1],
                     n_input=flags.n_input,
-                    regular=regular
+                    regular=regular,
+                    temporal_f = 0,
+                    cpd = 0,
+                    contrast = 1,
+                    phase = 90, 
+                    moving_flag = False
                 ).batch(1)
                             
                 return _data_set
@@ -249,7 +254,7 @@ if __name__ == '__main__':
 
     # Define the directory to save the results
     _results_dir = 'Time_to_first_spike_analysis'
-    _checkpoint_dir = 'Benchmark_models/v1_51978_lm_7414'
+    _checkpoint_dir = 'Benchmark_models/v1_100000_lm_14264'
 
     # Define particular task flags
     absl.app.flags.DEFINE_string('results_dir', _results_dir, '')
