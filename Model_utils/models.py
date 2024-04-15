@@ -179,23 +179,24 @@ class BackgroundNoiseLayer(tf.keras.layers.Layer):
         return i_in
 
     def call(self, inp): # inp only provides the shape
+        seq_len = tf.shape(inp)[1]
+
         # Generate the background spikes
-        # rest_of_brain = tf.cast(tf.random.uniform(
-        #         (self._batch_size, self._seq_len, self._n_bkg_units)) < self._bkg_firing_rate * .001, 
-        #         self._compute_dtype) # (1, 3000, 1)
-
-
-        rest_of_brain = tf.random.poisson(shape=(self._batch_size, self._seq_len, self._n_bkg_units), 
+        # rest_of_brain = tf.random.poisson(shape=(self._batch_size, self._seq_len, self._n_bkg_units), 
+        #                                 lam=self._bkg_firing_rate/1000, 
+        #                                 dtype=self._compute_dtype) # (1, 3000, 1)
+        rest_of_brain = tf.random.poisson(shape=(self._batch_size, seq_len, self._n_bkg_units), 
                                         lam=self._bkg_firing_rate/1000, 
                                         dtype=self._compute_dtype) # (1, 3000, 1
+        # rest_of_brain = tf.reshape(rest_of_brain, (self._batch_size * self._seq_len, self._n_bkg_units)) # (3000, 1) # (batch_size*sequence_length, input_dim)
+        rest_of_brain = tf.reshape(rest_of_brain, (self._batch_size * seq_len, self._n_bkg_units))
 
-        rest_of_brain = tf.reshape(rest_of_brain, (self._batch_size * self._seq_len, self._n_bkg_units)) # (3000, 1) # (batch_size*sequence_length, input_dim)
         noise_inputs = {'v1': None, 'lm': None}
         for column in noise_inputs.keys():
             noise_input = self.calculate_bkg_i_in(rest_of_brain, column=column) # (200000, 3000)
             noise_input = tf.transpose(noise_input) # (3000, 200000) # New shape (3000, 66634, 5)
-            noise_inputs[column] = tf.reshape(noise_input, (self._batch_size, self._seq_len, -1)) # (1, 3000, 200000) # (1, 3000, 333170)
-
+            # noise_inputs[column] = tf.reshape(noise_input, (self._batch_size, self._seq_len, -1)) # (1, 3000, 200000) # (1, 3000, 333170)
+            noise_inputs[column] = tf.reshape(noise_input, (self._batch_size, seq_len, -1))
         cat_noise_inputs = tf.concat([noise_inputs['v1'], noise_inputs['lm']], axis=-1)
 
         return cat_noise_inputs
@@ -733,16 +734,16 @@ class BillehColumn(tf.keras.layers.Layer):
         # this faster method uses sparseness of the rec_z_buf.
         # it identifies the non_zero rows of rec_z_buf and only computes the
         # sparse matrix multiplication for those rows.
-        rec_z_buf = tf.cast(rec_z_buf, tf.float32)
+        rec_z_buf = tf.cast(rec_z_buf, self._compute_dtype)
         
         # find the non-zero rows of rec_z_buf
         non_zero_cols = tf.where(rec_z_buf)[:, 1]
-        nnz = tf.cast(tf.size(non_zero_cols), dtype=tf.int32)  # number of non zero
+        nnz = tf.size(non_zero_cols) # number of non zero
         if nnz == 0: # nothing is firing
             i_rec = tf.zeros((self._n_max_receptors * self._n_neurons, 1), dtype=self._compute_dtype)
         else:
             sliced_rec_z_buf = tf.gather(rec_z_buf, non_zero_cols, axis=1)
-            sliced_rec_z_buf = tf.cast(sliced_rec_z_buf, self._compute_dtype)
+            # sliced_rec_z_buf = tf.cast(sliced_rec_z_buf, self._compute_dtype)
             # let's make sparse arrays for multiplication
             # new_indices will be a version of indices that only contains the non-zero columns
             # in the non_zero_cols, and changes the indices accordingly.
@@ -773,15 +774,15 @@ class BillehColumn(tf.keras.layers.Layer):
         # it identifies the non_zero rows of rec_z_buf and only computes the
         # sparse matrix multiplication for those rows.
         if self.interarea_indices[column_order] is not None:
-            interarea_z_bufs = tf.cast(interarea_z_bufs, tf.float32)
+            interarea_z_bufs = tf.cast(interarea_z_bufs, self._compute_dtype)
             # find the non-zero rows of rec_z_buf
             non_zero_cols = tf.where(interarea_z_bufs)[:, 1]
-            nnz = tf.cast(tf.size(non_zero_cols), dtype=tf.int32)  # number of non zero
+            nnz = tf.size(non_zero_cols)  # number of non zero
             if nnz == 0:
                 i_interarea = tf.zeros((self._n_max_receptors * self._n_neurons, 1), dtype=self._compute_dtype)
             else:
                 sliced_interarea_z_buf = tf.gather(interarea_z_bufs, non_zero_cols, axis=1)
-                sliced_interarea_z_buf = tf.cast(sliced_interarea_z_buf, self._compute_dtype)
+                # sliced_interarea_z_buf = tf.cast(sliced_interarea_z_buf, self._compute_dtype)
                 # let's make sparse arrays for multiplication
                 # new_indices will be a version of indices that only contains the non-zero columns
                 # in the non_zero_cols, and changes the indices accordingly.
@@ -1086,11 +1087,13 @@ def create_model(networks,
 
 
     # Create the input of the model
-    x = tf.keras.layers.Input(shape=(seq_len, n_input,)) # this shape (None, seq_len, n_input) dose not contain batch size, batch_size can be assigned as another argument
+    # x = tf.keras.layers.Input(shape=(seq_len, n_input,)) # this shape (None, seq_len, n_input) dose not contain batch size, batch_size can be assigned as another argument
+    x = tf.keras.layers.Input(shape=(None, n_input,))
     neurons =  networks['v1']['n_nodes'] + networks['lm']['n_nodes']
     
      # Create an input layer for the initial state of the RNN
-    state_input_holder = tf.keras.layers.Input(shape=(seq_len, neurons))
+    # state_input_holder = tf.keras.layers.Input(shape=(seq_len, neurons))
+    state_input_holder = tf.keras.layers.Input(shape=(None, neurons))
     state_input = tf.cast(tf.identity(state_input_holder), dtype) # (None, 2500, 1000+150)
     # The state_input is initialized with zeros and its purpose is to provide a way to pass additional input to the model if needed
 
