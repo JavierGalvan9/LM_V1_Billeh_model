@@ -13,7 +13,7 @@ if version.parse(tf.__version__) < version.parse("2.4.0"):
 else:
     from tensorflow.keras import mixed_precision
 
-from Model_utils import load_sparse, models, other_billeh_utils, stim_dataset, full_field_flash_generator
+from Model_utils import load_sparse, models, other_billeh_utils, stim_dataset, gabor_patches_generator
 from Model_utils.plotting_utils import InputActivityFigure
 from general_utils import file_management
 from time import time
@@ -158,7 +158,7 @@ def main(_):
         # Select the dtype of the data saved
         data_path = os.path.join(flags.results_dir, "Data")
         os.makedirs(data_path, exist_ok=True)
-        SimulationDataHDF5 = other_billeh_utils.SaveSimDataHDF5(flags, data_path, networks, save_core_only=True)
+        SimulationDataHDF5 = other_billeh_utils.SaveSimDataHDF5_gabors2(flags, data_path, networks, save_core_only=True)
 
         # Define the functions to forward pass the inputs through the model
         def roll_out(_x):
@@ -182,17 +182,20 @@ def main(_):
 
         def get_dataset_fn(regular=False):
             def _f(input_context):
-                _data_set = full_field_flash_generator.generate_drifting_grating_tuning(
-                    seq_len=flags.seq_len,
-                    pre_delay=delays[0],
+                _data_set = gabor_patches_generator.generate_drifting_grating_tuning(
+                    seq_len = flags.seq_len,
+                    pre_delay = delays[0],
                     post_delay = delays[1],
-                    n_input=flags.n_input,
-                    regular=regular,
-                    temporal_f = 0,
-                    cpd = 0,
+                    n_input = flags.n_input,
+                    regular = regular,
+                    orientation = flags.orientation, 
+                    x0 = flags.circle_row,
+                    y0 = flags.circle_column,
+                    r = flags.radius_circle,
+                    temporal_f = 2,
+                    cpd = 0.04,
                     contrast = 1,
-                    phase = 90, 
-                    moving_flag = False
+                    moving_flag = True
                 ).batch(1)
                             
                 return _data_set
@@ -215,11 +218,12 @@ def main(_):
                 "lm": {"z": lm_spikes.numpy()},
                 "LGN": {"z": lgn_spikes.numpy()}
             }
-            SimulationDataHDF5(simulation_data, trial_id)
+            SimulationDataHDF5(simulation_data, trial_id, flags.circle_column, flags.circle_row, flags.orientation)
             time_per_save += time() - t0
             print(f'    Trial running time: {time() - t0:.2f}s')
             mem_data = printgpu(verbose=1)
             print(f'    Memory consumption (current - peak): {mem_data[0]:.2f} GB - {mem_data[1]:.2f} GB\n')
+            
 
         # Save the simulation metadata  
         time_per_sim /= flags.n_trials
@@ -228,6 +232,7 @@ def main(_):
         with open(metadata_path, 'w') as out_file:
             out_file.write(f'Consumed time per simulation: {time_per_sim}\n')
             out_file.write(f'Consumed time saving: {time_per_save}\n')
+            out_file.write(f'Simulation finished at {dt.datetime.now().strftime("%d-%m-%Y %H:%M")}\n')
 
         ### RASTER PLOT ###
         images_dir = os.path.join(flags.results_dir, 'Raster_plots')
@@ -253,7 +258,7 @@ def main(_):
 if __name__ == '__main__':
 
     # Define the directory to save the results
-    _results_dir = 'Time_to_first_spike_analysis'
+    _results_dir = 'receptive_field_analysis'
     _checkpoint_dir = 'Benchmark_models/v1_100000_lm_14264'
 
     # Define particular task flags
@@ -262,6 +267,12 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_integer('n_trials', 10, '')
     absl.app.flags.DEFINE_integer('seq_len', 3000, '')
     absl.app.flags.DEFINE_string('delays', '500,500', '')
+
+    # flags for gabor patches
+    absl.app.flags.DEFINE_integer('orientation', 45, '')
+    absl.app.flags.DEFINE_integer('circle_row', 6, '')
+    absl.app.flags.DEFINE_integer('circle_column', 5, '')
+    absl.app.flags.DEFINE_integer('radius_circle', 10, '')
 
     # Load the best model configuration and set it as default
     config_path = os.path.join(_checkpoint_dir, 'config.json')
