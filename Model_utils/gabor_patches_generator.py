@@ -124,9 +124,9 @@ def generate_drifting_grating_tuning(phase = None, orientation=None, temporal_f=
             if orientation is None:
                 # generate randomly.
                 if regular:
-                    theta = (theta + 45) % 360
+                    theta = (theta + 45) % 180
                 else:
-                    theta = tf.random.uniform([], 0, 360) #np.random.uniform(0, 360)
+                    theta = tf.random.uniform([], 0, 180) #np.random.uniform(0, 360)
             else:
                 theta = orientation
 
