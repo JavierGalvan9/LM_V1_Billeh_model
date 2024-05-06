@@ -104,7 +104,7 @@ def main(_):
             networks, 
             lgn_inputs, 
             bkg_inputs, 
-            seq_len=flags.seq_len,
+            seq_len=4*flags.seq_len,
             n_input=flags.n_input, 
             dtype=tf.float32, 
             input_weight_scale=flags.input_weight_scale,
@@ -131,7 +131,7 @@ def main(_):
         del lgn_inputs, bkg_inputs
 
         #  Define and build the optimizer
-        model.build((flags.batch_size, flags.seq_len, flags.n_input))
+        model.build((flags.batch_size, 4*flags.seq_len, flags.n_input))
         print(f"Model built in {time()-t0:.2f} s\n")
 
         # Define and build the optimizer
@@ -158,12 +158,12 @@ def main(_):
         # Select the dtype of the data saved
         data_path = os.path.join(flags.results_dir, "Data")
         os.makedirs(data_path, exist_ok=True)
-        SimulationDataHDF5 = other_billeh_utils.SaveSimDataHDF5_gabors2(flags, data_path, networks, save_core_only=True)
+        SimulationDataHDF5 = other_billeh_utils.SaveGaborSimDataHDF5(flags, data_path, networks, n_rows = 1, n_cols = 1, save_core_only=True)
 
         # Define the functions to forward pass the inputs through the model
         def roll_out(_x):
             _initial_state = tf.nest.map_structure(lambda _a: _a.read_value(), state_variables)
-            dummy_zeros = tf.zeros((flags.batch_size, flags.seq_len, n_total_neurons), dtype)
+            dummy_zeros = tf.zeros((flags.batch_size, 4*flags.seq_len, n_total_neurons), dtype)
             _out, _p, _ = extractor_model((_x, dummy_zeros, _initial_state))
             _v1_z, _lm_z = _out[0][0], _out[0][2]
             # update state_variables with the new model state
@@ -180,79 +180,86 @@ def main(_):
         # Define dataset
         delays = [int(a) for a in flags.delays.split(',') if a != '']
 
-        def get_dataset_fn(regular=False):
-            def _f(input_context):
-                _data_set = gabor_patches_generator.generate_drifting_grating_tuning(
-                    seq_len = flags.seq_len,
-                    pre_delay = delays[0],
-                    post_delay = delays[1],
-                    n_input = flags.n_input,
-                    regular = regular,
-                    orientation = flags.orientation, 
-                    x0 = flags.circle_row,
-                    y0 = flags.circle_column,
-                    r = flags.radius_circle,
-                    temporal_f = 2,
-                    cpd = 0.04,
-                    contrast = 1,
-                    moving_flag = True
-                ).batch(1)
-                            
-                return _data_set
-            return _f
-        
-        data_set = strategy.distribute_datasets_from_function(get_dataset_fn())
-
-        print("---------- Training started at ", dt.datetime.now().strftime('%d-%m-%Y %H:%M'), ' ----------\n')
-        time_per_sim = 0
-        time_per_save = 0
-        for trial_id in range(flags.n_trials):
-            print(f'Trial {trial_id+1}/{flags.n_trials} ...')
-            t0 = time()
-            data_it = iter(data_set)
-            lgn_spikes, y, _, w = next(data_it)
-            v1_spikes, lm_spikes = distributed_roll_out(lgn_spikes)
-            # Save simulation data
-            simulation_data = {
-                "v1": {"z": v1_spikes.numpy()},
-                "lm": {"z": lm_spikes.numpy()},
-                "LGN": {"z": lgn_spikes.numpy()}
-            }
-            SimulationDataHDF5(simulation_data, trial_id, flags.circle_column, flags.circle_row, flags.orientation)
-            time_per_save += time() - t0
-            print(f'    Trial running time: {time() - t0:.2f}s')
-            mem_data = printgpu(verbose=1)
-            print(f'    Memory consumption (current - peak): {mem_data[0]:.2f} GB - {mem_data[1]:.2f} GB\n')
+        for row, col in [(flags.circle_row, flags.circle_column)]:
+            def get_dataset_fn(regular=False):
+                def _f(input_context):
+                    _data_set = gabor_patches_generator.generate_drifting_grating_tuning(
+                        seq_len = flags.seq_len,
+                        pre_delay = delays[0],
+                        post_delay = delays[1],
+                        n_input = flags.n_input,
+                        regular = regular,
+                        orientation = flags.orientation, 
+                        x0 = row,
+                        y0 = col,
+                        r = flags.radius_circle,
+                        temporal_f = 2,
+                        cpd = 0.04,
+                        contrast = 1,
+                        moving_flag = True
+                    ).batch(1)
+                                
+                    return _data_set
+                return _f
             
+            data_set = strategy.distribute_datasets_from_function(get_dataset_fn())
 
-        # Save the simulation metadata  
-        time_per_sim /= flags.n_trials
-        time_per_save /= flags.n_trials
-        metadata_path = os.path.join(data_path, 'Simulation stats')
-        with open(metadata_path, 'w') as out_file:
-            out_file.write(f'Consumed time per simulation: {time_per_sim}\n')
-            out_file.write(f'Consumed time saving: {time_per_save}\n')
-            out_file.write(f'Simulation finished at {dt.datetime.now().strftime("%d-%m-%Y %H:%M")}\n')
+            print("---------- Training started at ", dt.datetime.now().strftime('%d-%m-%Y %H:%M'), ' ----------\n')
+            time_per_sim = 0
+            time_per_save = 0
+            for trial_id in range(flags.n_trials):
+                print(f'Trial {trial_id+1}/{flags.n_trials} ...')
+                t0 = time()
+                data_it = iter(data_set)
+                lgn_spikes = np.zeros((flags.batch_size, 4*flags.seq_len, flags.n_input), dtype=np.bool_)
+                for i in range(4):
+                    x, y, _, w = next(data_it) 
+                    lgn_spikes[:, i*flags.seq_len:(i+1)*flags.seq_len, :] = x
+                    # print y para ver la orientacio
 
-        ### RASTER PLOT ###
-        images_dir = os.path.join(flags.results_dir, 'Raster_plots')
-        os.makedirs(images_dir, exist_ok=True)
-        graph = InputActivityFigure(
-                                    networks,
-                                    flags.data_dir,
-                                    images_dir,
-                                    filename=f'Rasterplot_{trial_id}',
-                                    frequency=flags.temporal_f,
-                                    stimuli_init_time=delays[0],
-                                    stimuli_end_time=flags.seq_len-delays[1],
-                                    reverse=False,
-                                    plot_core_only=True,
-                                    )
-        graph(lgn_spikes.numpy(), v1_spikes.numpy(), lm_spikes.numpy())
+                lgn_spikes = tf.constant(lgn_spikes, dtype=tf.bool)
+                v1_spikes, lm_spikes = distributed_roll_out(lgn_spikes)
+                # Save simulation data
+                simulation_data = {
+                    "v1": {"z": v1_spikes.numpy()},
+                    "lm": {"z": lm_spikes.numpy()},
+                    "LGN": {"z": lgn_spikes.numpy()}
+                }
+                SimulationDataHDF5(simulation_data, trial_id, row, col)
+                time_per_save += time() - t0
+                print(f'    Trial running time: {time() - t0:.2f}s')
+                mem_data = printgpu(verbose=1)
+                print(f'    Memory consumption (current - peak): {mem_data[0]:.2f} GB - {mem_data[1]:.2f} GB\n')
+                
 
-        ### READ THE DATA FILES ###
-        # full_data_path = 'Time_to_first_spike_analysis/Data/simulation_data.hdf5'
-        # data, flags_dict, n_trials = other_billeh_utils.load_simulation_results_hdf5(full_data_path)
+            # Save the simulation metadata  
+            time_per_sim /= flags.n_trials
+            time_per_save /= flags.n_trials
+            metadata_path = os.path.join(data_path, 'Simulation stats')
+            with open(metadata_path, 'w') as out_file:
+                out_file.write(f'Consumed time per simulation: {time_per_sim}\n')
+                out_file.write(f'Consumed time saving: {time_per_save}\n')
+                out_file.write(f'Simulation finished at {dt.datetime.now().strftime("%d-%m-%Y %H:%M")}\n')
+
+            ### RASTER PLOT ###
+            images_dir = os.path.join(flags.results_dir, 'Raster_plots')
+            os.makedirs(images_dir, exist_ok=True)
+            graph = InputActivityFigure(
+                                        networks,
+                                        flags.data_dir,
+                                        images_dir,
+                                        filename=f'Rasterplot_{trial_id}',
+                                        frequency=flags.temporal_f,
+                                        stimuli_init_time=delays[0],
+                                        stimuli_end_time=4*flags.seq_len-delays[1],
+                                        reverse=False,
+                                        plot_core_only=True,
+                                        )
+            graph(lgn_spikes.numpy(), v1_spikes.numpy(), lm_spikes.numpy())
+
+            ### READ THE DATA FILES ###
+            # full_data_path = 'Time_to_first_spike_analysis/Data/simulation_data.hdf5'
+            # data, flags_dict, n_trials = other_billeh_utils.load_simulation_results_hdf5(full_data_path)
 
 
 if __name__ == '__main__':
