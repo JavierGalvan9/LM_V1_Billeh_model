@@ -592,14 +592,14 @@ def load_billeh(flags, n_neurons, flag_str=''):
 
 
 # If the model already exist we can load it, or if it does not just save it for future occasions
-def cached_load_billeh(flags, n_neurons, flag_str=None):
+def cached_load_billeh(flags, n_neurons, flag_str=''):
     store = False
     # input_population, networks, bkg_weights, n_input, n_abstract_output, n_completed_output  = None, None, None, None, None, None
     networks, lgn_inputs, bkg_inputs = None, None, None  # , None, None
     # flag_str = f'ratio{flags.area_neuron_ratio}_rec{flags.neurons}_s{flags.seed}_c{flags.core_only}_con{flags.connected_selection}'
     v1_neurons = n_neurons['v1']
     lm_neurons = n_neurons['lm']
-    if flag_str is None:
+    if flag_str == '':
         flag_str = f'v1_{v1_neurons}_lm_{lm_neurons}_s{flags.seed}_c{flags.core_only}_con{flags.connected_selection}_n_input_{flags.n_input}_interarea_weight_distribution_{flags.interarea_weight_distribution}_E4_weight_factor_{flags.E4_weight_factor}_disconnect_v1_lm_L6_excitatory_projections_{flags.disconnect_v1_lm_L6_excitatory_projections}'
     
     file_dir = os.path.split(__file__)[0]

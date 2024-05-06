@@ -78,7 +78,7 @@ def generate_drifting_grating_tuning(orientation=None, temporal_f=2, cpd=0.04, c
                                      row_size=120, col_size=240,
                                      seq_len=600, pre_delay=50, post_delay=50,
                                      current_input=False, regular=False, n_input=17400,
-                                     bmtk_compat=True, return_firing_rates=False):
+                                     bmtk_compat=True, return_firing_rates=False, rotation='cw', billeh_phase=False):
     """ make a drifting gratings stimulus for FR and OSI tuning."""
     # mimc_lgn_std, mimc_lgn_mean = 0.02855, 0.02146
 
@@ -101,7 +101,15 @@ def generate_drifting_grating_tuning(orientation=None, temporal_f=2, cpd=0.04, c
                 theta = orientation
 
             theta = tf.cast(theta, tf.float32)
-            movie = make_drifting_grating_stimulus(moving_flag=True, image_duration=duration, cpd=cpd, temporal_f=temporal_f, theta=theta, phase=None, contrast=contrast)
+            if rotation == "cw":
+                mov_theta = theta
+            if rotation == "ccw":
+                mov_theta = -theta # flip the sign
+
+            if billeh_phase:
+                mov_theta += 180
+
+            movie = make_drifting_grating_stimulus(moving_flag=True, image_duration=duration, cpd=cpd, temporal_f=temporal_f, theta=mov_theta, phase=None, contrast=contrast)
             # movie = tf.expand_dims(movie, axis=-1) #movie[...,None]  # add dim
 
             # # add an empty period before a period of gray image
@@ -123,7 +131,6 @@ def generate_drifting_grating_tuning(orientation=None, temporal_f=2, cpd=0.04, c
                 yield tf.constant(firing_rates, dtype=tf.float32, shape=(seq_len, n_input))
 
             else:
-
                 del spatial
                 # sample rate
                 # assuming dt = 1 ms
