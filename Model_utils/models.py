@@ -131,75 +131,173 @@ def exp_convolve(tensor, decay=.8, reverse=False, initializer=None, axis=0):
     return filtered
 
 
-class BackgroundNoiseLayer(tf.keras.layers.Layer):
-    """
-    This class calculates the input currents from the BKG noise by processing all timesteps at once."
-    For that reason is unfeasible if the user wants to train the LGN -> V1 weights.
-    Each call takes 0.03 seconds for 600 ms of simulation.
+# class BackgroundNoiseLayer(tf.keras.layers.Layer):
+#     """
+#     This class calculates the input currents from the BKG noise by processing all timesteps at once."
+#     For that reason is unfeasible if the user wants to train the LGN -> V1 weights.
+#     Each call takes 0.03 seconds for 600 ms of simulation.
 
-    Returns:
-        _type_: input_currents (self._compute_dtype)
-    """
+#     Returns:
+#         _type_: input_currents (self._compute_dtype)
+#     """
+#     def __init__(self, cell, batch_size, seq_len,
+#                  bkg_units_firing_rate=1000, n_bkg_units=1, 
+#                  dtype=tf.float32, **kwargs):
+#         super().__init__(**kwargs)
+#         self._dtype = dtype
+#         self._batch_size = batch_size
+#         self._seq_len = seq_len
+#         self._bkg_units_firing_rate = bkg_units_firing_rate
+#         self._n_bkg_units = n_bkg_units
+
+#         self._bkg_weights = {'v1': None, 'lm': None}
+#         self._bkg_weights['v1'] = cell.v1.bkg_input_weights #(4000,)
+#         self._bkg_weights['lm'] = cell.lm.bkg_input_weights #* 1.2 #(600,)
+
+#         self._bkg_indices = {'v1': None, 'lm': None}
+#         self._bkg_indices['v1'] = cell.v1.bkg_input_indices
+#         self._bkg_indices['lm'] = cell.lm.bkg_input_indices
+
+#         self._dense_shape = {'v1': None, 'lm': None}
+#         self._dense_shape['v1'] = cell.v1.bkg_input_dense_shape
+#         self._dense_shape['lm'] = cell.lm.bkg_input_dense_shape
+
+#     def calculate_bkg_i_in(self, inputs, column='v1'):
+#         # This function performs the tensor multiplication to calculate the recurrent currents at each timestep
+#         # i_in = tf.TensorArray(dtype=self._compute_dtype, size=self._n_max_receptors)
+#         sparse_w_in = tf.sparse.SparseTensor(
+#                 self._bkg_indices[column],
+#                 self._bkg_weights[column], 
+#                 self._dense_shape[column],
+#             )
+        
+#         i_in = tf.sparse.sparse_dense_matmul(
+#                                             sparse_w_in,
+#                                             inputs,
+#                                             adjoint_b=True
+#                                             )
+#         return i_in
+
+#     def call(self, inp): # inp only provides the shape
+#         seq_len = tf.shape(inp)[1]
+
+#         # Generate the background spikes
+#         # rest_of_brain = tf.random.poisson(shape=(self._batch_size, self._seq_len, self._n_bkg_units), 
+#         #                                 lam=self._bkg_units_firing_rate/1000, 
+#         #                                 dtype=self._compute_dtype) # (1, 3000, 1)
+#         rest_of_brain = tf.random.poisson(shape=(self._batch_size, seq_len, self._n_bkg_units), 
+#                                         lam=self._bkg_units_firing_rate/1000, 
+#                                         dtype=self._compute_dtype) # (1, 3000, 1
+#         # rest_of_brain = tf.reshape(rest_of_brain, (self._batch_size * self._seq_len, self._n_bkg_units)) # (3000, 1) # (batch_size*sequence_length, input_dim)
+#         rest_of_brain = tf.reshape(rest_of_brain, (self._batch_size * seq_len, self._n_bkg_units))
+
+#         noise_inputs = {'v1': None, 'lm': None}
+#         for column in noise_inputs.keys():
+#             noise_input = self.calculate_bkg_i_in(rest_of_brain, column=column) # (200000, 3000)
+#             noise_input = tf.transpose(noise_input) # (3000, 200000) # New shape (3000, 66634, 5)
+#             # noise_inputs[column] = tf.reshape(noise_input, (self._batch_size, self._seq_len, -1)) # (1, 3000, 200000) # (1, 3000, 333170)
+#             noise_inputs[column] = tf.reshape(noise_input, (self._batch_size, seq_len, -1))
+#         cat_noise_inputs = tf.concat([noise_inputs['v1'], noise_inputs['lm']], axis=-1)
+
+#         return cat_noise_inputs
+
+
+
+class BackgroundNoiseLayer(tf.keras.layers.Layer):
     def __init__(self, cell, batch_size, seq_len,
-                 bkg_firing_rate=1000, n_bkg_units=1, 
+                 bkg_units_firing_rate=1000, n_bkg_units=1, 
+                 n_bkg_connections = 1, 
                  dtype=tf.float32, **kwargs):
         super().__init__(**kwargs)
         self._dtype = dtype
         self._batch_size = batch_size
         self._seq_len = seq_len
-        self._bkg_firing_rate = bkg_firing_rate
+        self._bkg_units_firing_rate = bkg_units_firing_rate
         self._n_bkg_units = n_bkg_units
+        self._n_bkg_connections = n_bkg_connections
 
+        # Initialize weights and indices
         self._bkg_weights = {'v1': None, 'lm': None}
-        self._bkg_weights['v1'] = cell.v1.bkg_input_weights #(4000,)
-        self._bkg_weights['lm'] = cell.lm.bkg_input_weights #* 1.2 #(600,)
-
         self._bkg_indices = {'v1': None, 'lm': None}
-        self._bkg_indices['v1'] = cell.v1.bkg_input_indices
-        self._bkg_indices['lm'] = cell.lm.bkg_input_indices
-
         self._dense_shape = {'v1': None, 'lm': None}
-        self._dense_shape['v1'] = cell.v1.bkg_input_dense_shape
-        self._dense_shape['lm'] = cell.lm.bkg_input_dense_shape
+        self._initialize_background_inputs(cell)
+
+    def _initialize_background_inputs(self, cell):
+        # Create connectivity and assign weights for 'v1' and 'lm' areas
+        for column in ['v1', 'lm']:
+            num_neurons = cell.__getattribute__(column).bkg_input_weights.shape[0]
+            original_weights = cell.__getattribute__(column).bkg_input_weights
+            original_indices = cell.__getattribute__(column).bkg_input_indices
+            original_dense_shape = cell.__getattribute__(column).bkg_input_dense_shape
+
+            if self._n_bkg_connections == 1:
+                indices = original_indices
+                weights = original_weights
+            else:
+                # Generate random connections
+                new_bkg_indices = tf.random.uniform(shape=(original_indices.shape[0], self._n_bkg_connections), minval=0, maxval=self._n_bkg_units, dtype=tf.int64)
+                indices = tf.reshape(tf.stack([tf.repeat(original_indices[:, 0], self._n_bkg_connections), tf.reshape(new_bkg_indices, [-1])], axis=1), [-1, 2])
+                # this implementation allows a neuron to establish more than one connection to a single BKG unit
+                # Repeat weights for each connection
+                weights = tf.repeat(original_weights, self._n_bkg_connections)
+
+            # tf.print(column)
+            # tf.print(cell.__getattribute__(column).bkg_input_weights)
+            # cell.__getattribute__(column).bkg_input_weights = tf.Variable(weights, trainable=original_weights.trainable)
+            # tf.print(weights)
+            # tf.print(cell.__getattribute__(column).bkg_input_weights.shape)
+            # self._bkg_weights[column] = cell.__getattribute__(column).bkg_input_weights #tf.Variable(weights, trainable=original_weights.trainable)
+            
+             # Create a new constraint based on the new weights
+            new_bkg_input_weight_positive = tf.Variable(weights >= 0.0, name="bkg_input_weights_sign", trainable=False)
+            new_constraint = SignedConstraint(new_bkg_input_weight_positive)
+
+
+            cell.__getattribute__(column).bkg_input_weights = tf.Variable(weights, 
+                                                                        name=column+'_rest_of_brain_weights', 
+                                                                        constraint=new_constraint,
+                                                                        dtype=original_weights.dtype,
+                                                                        trainable=original_weights.trainable)
+
+            # cell.__getattribute__(column).bkg_input_weights.constraint = new_constraint
+
+            # self._bkg_weights[column] = tf.Variable(weights, 
+            #                                         name=column+'_rest_of_brain_weights', 
+            #                                         constraint=SignedConstraint(bkg_input_weight_positive),
+            #                                         dtype=original_weights.dtype,
+            #                                         trainable=original_weights.trainable)
+
+            self._bkg_weights[column] = cell.__getattribute__(column).bkg_input_weights
+            self._bkg_indices[column] = tf.Variable(indices, trainable=False, dtype=tf.int64)
+            self._dense_shape[column] = (original_dense_shape[0],  self._n_bkg_units)
 
     def calculate_bkg_i_in(self, inputs, column='v1'):
-        # This function performs the tensor multiplication to calculate the recurrent currents at each timestep
-        # i_in = tf.TensorArray(dtype=self._compute_dtype, size=self._n_max_receptors)
         sparse_w_in = tf.sparse.SparseTensor(
-                self._bkg_indices[column],
-                self._bkg_weights[column], 
-                self._dense_shape[column],
-            )
-        
-        i_in = tf.sparse.sparse_dense_matmul(
-                                            sparse_w_in,
-                                            inputs,
-                                            adjoint_b=True
-                                            )
+            self._bkg_indices[column],
+            self._bkg_weights[column], 
+            self._dense_shape[column]
+        )
+        i_in = tf.sparse.sparse_dense_matmul(sparse_w_in, inputs, adjoint_b=True)
         return i_in
 
-    def call(self, inp): # inp only provides the shape
+    def call(self, inp):
         seq_len = tf.shape(inp)[1]
-
-        # Generate the background spikes
-        # rest_of_brain = tf.random.poisson(shape=(self._batch_size, self._seq_len, self._n_bkg_units), 
-        #                                 lam=self._bkg_firing_rate/1000, 
-        #                                 dtype=self._compute_dtype) # (1, 3000, 1)
         rest_of_brain = tf.random.poisson(shape=(self._batch_size, seq_len, self._n_bkg_units), 
-                                        lam=self._bkg_firing_rate/1000, 
-                                        dtype=self._compute_dtype) # (1, 3000, 1
-        # rest_of_brain = tf.reshape(rest_of_brain, (self._batch_size * self._seq_len, self._n_bkg_units)) # (3000, 1) # (batch_size*sequence_length, input_dim)
+                                          lam=self._bkg_units_firing_rate/1000, 
+                                          dtype=self._dtype)
         rest_of_brain = tf.reshape(rest_of_brain, (self._batch_size * seq_len, self._n_bkg_units))
 
         noise_inputs = {'v1': None, 'lm': None}
         for column in noise_inputs.keys():
-            noise_input = self.calculate_bkg_i_in(rest_of_brain, column=column) # (200000, 3000)
-            noise_input = tf.transpose(noise_input) # (3000, 200000) # New shape (3000, 66634, 5)
-            # noise_inputs[column] = tf.reshape(noise_input, (self._batch_size, self._seq_len, -1)) # (1, 3000, 200000) # (1, 3000, 333170)
+            noise_input = self.calculate_bkg_i_in(rest_of_brain, column=column)
+            noise_input = tf.transpose(noise_input)
             noise_inputs[column] = tf.reshape(noise_input, (self._batch_size, seq_len, -1))
+        
         cat_noise_inputs = tf.concat([noise_inputs['v1'], noise_inputs['lm']], axis=-1)
-
         return cat_noise_inputs
+
+
+
     
 
 class SparseLayer(tf.keras.layers.Layer):
@@ -982,7 +1080,8 @@ class MultiAreaModel(tf.keras.layers.Layer):
                  train_recurrent_v1, 
                  train_recurrent_lm, 
                  train_input, 
-                 train_interarea, 
+                 train_interarea_lm_v1,
+                 train_interarea_v1_lm,
                  train_noise):
         
         super().__init__()
@@ -995,14 +1094,14 @@ class MultiAreaModel(tf.keras.layers.Layer):
                                input_weight_scale=input_weight_scale, interarea_weight_scale=interarea_weight_scale,
                                lr_scale=lr_scale, max_delay=max_delay, batch_size=batch_size,
                                pseudo_gauss=pseudo_gauss, spike_gradient=spike_gradient, train_recurrent=train_recurrent_v1, 
-                               train_input=train_input, train_interarea=train_interarea, train_noise=train_noise, name='v1', hard_reset=hard_reset)
+                               train_input=train_input, train_interarea=train_interarea_v1_lm, train_noise=train_noise, name='v1', hard_reset=hard_reset)
 
         self.lm = BillehColumn(networks['lm'], None, bkg_inputs['lm'],
                                gauss_std=gauss_std, dampening_factor=dampening_factor,
                                input_weight_scale=input_weight_scale, interarea_weight_scale=interarea_weight_scale,
                                lr_scale=lr_scale, max_delay=max_delay, batch_size=batch_size,
                                pseudo_gauss=pseudo_gauss, spike_gradient=spike_gradient, train_recurrent=train_recurrent_lm, 
-                               train_input=train_input, train_interarea=train_interarea, train_noise=train_noise, name='lm', hard_reset=hard_reset)
+                               train_input=train_input, train_interarea=train_interarea_lm_v1, train_noise=train_noise, name='lm', hard_reset=hard_reset)
 
         self._n_neurons = self.v1._n_neurons + self.lm._n_neurons
 
@@ -1067,7 +1166,8 @@ def create_model(networks,
                 lr_scale=800., 
                 train_recurrent_v1=True, 
                 train_recurrent_lm=False, 
-                train_interarea=True, 
+                train_interarea_lm_v1=True, 
+                train_interarea_v1_lm=True, 
                 train_input=False, 
                 train_noise=True,
                 neuron_output=True, 
@@ -1121,7 +1221,8 @@ def create_model(networks,
                             train_recurrent_v1=train_recurrent_v1, 
                             train_recurrent_lm=train_recurrent_lm, 
                             train_input=train_input, 
-                            train_interarea=train_interarea,
+                            train_interarea_lm_v1=train_interarea_lm_v1, 
+                            train_interarea_v1_lm=train_interarea_v1_lm, 
                             train_noise=train_noise)
         
     zero_state = cell.zero_state_multi_areas(batch_size, dtype)
@@ -1146,7 +1247,10 @@ def create_model(networks,
     bkg_inputs = BackgroundNoiseLayer(cell, 
                                       batch_size=batch_size,
                                       seq_len=seq_len,
-                                      dtype=dtype
+                                      dtype=dtype,
+                                      bkg_units_firing_rate=250, 
+                                      n_bkg_units=100,
+                                      n_bkg_connections=4
                                     )(x) # (None, 2500, 4000+600)
 
     # Concatenate all the inputs together    

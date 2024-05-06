@@ -45,6 +45,9 @@ def calculate_OSI_DSI(rates_df, network, DG_angles=range(0,360, 45), n_selected_
     # Get the number of neurons and DG angles
     n_neurons = len(pop_names)
     node_ids = np.arange(n_neurons)
+
+    # save all rates with pickle
+    rates_df.to_pickle('rates_df.pkl')
     
     # Get the firing rates for every neuron and DG angle
     all_rates = np.array([g["Ave_Rate(Hz)"] for _, g in rates_df.groupby("DG_angle")]).T
@@ -84,7 +87,7 @@ def calculate_OSI_DSI(rates_df, network, DG_angles=range(0,360, 45), n_selected_
 
 class ModelMetricsAnalysis:    
 
-    def __init__(self, network, neuropixels_feature="Ave_Rate(Hz)", data_dir='GLIF_network', directory='', filename='', n_trials=1, drifting_gratings_init=50, 
+    def __init__(self, network, data_dir='GLIF_network', n_trials=1, drifting_gratings_init=50, 
                  drifting_gratings_end=550, area='v1', analyze_core_only=True):
         self.n_neurons = network['n_nodes']
         self.network = network
@@ -94,11 +97,11 @@ class ModelMetricsAnalysis:
         self.drifting_gratings_init = drifting_gratings_init
         self.drifting_gratings_end = drifting_gratings_end
         self.analyze_core_only = analyze_core_only
-        self.neuropixels_feature = neuropixels_feature
-        self.directory = os.path.join(directory, f'{self.area}')
-        self.filename = filename
-    
-    def __call__(self, spikes, DG_angles, axis=None):
+        
+    def __call__(self, spikes, DG_angles, metrics=["Rate at preferred direction (Hz)", "OSI", "DSI"], axis=None, 
+                 directory='', filename=''):
+        
+        directory = os.path.join(directory, f'{self.area}')
 
         # Isolate the core neurons if necessary
         if self.analyze_core_only:
@@ -134,27 +137,42 @@ class ModelMetricsAnalysis:
         # if spikes shape is (n_angles, n_time_steps, n_neurons) reshape it to (n_angles, n_trials, n_time_steps, n_neurons)
         if spikes.shape[0] == len(DG_angles):
             spikes = spikes.reshape(len(DG_angles), self.n_trials, spikes.shape[-2], n_neurons_plot)
+            # spikes = spikes[:, np.newaxis, :, :]
         
         firing_rates_df = self.create_firing_rates_df(n_neurons_plot, spikes, n_trials=self.n_trials, 
                                                       drifting_gratings_init=self.drifting_gratings_init, drifting_gratings_end=self.drifting_gratings_end, 
                                                       DG_angles=DG_angles)
         
         # Save the firing rates
-        # firing_rates_df.to_csv(os.path.join(self.save_dir, f"V1_DG_firing_rates_df.csv"), sep=" ", index=False)
+        # firing_rates_df.to_csv(f"{self.area}_DG_firing_rates_df.csv", sep=" ", index=False)
 
+        # # Calculate approximation to OSIs and DSIs
+        # osi_approx_df = self.calculate_osi_approximation(firing_rates_df)
+        # osi_approx_normalized_df = self.calculate_osi_approximation(firing_rates_df, normalized=True)
+        osi_approx_real_df = self.calculate_osi_approximation(firing_rates_df, normalized=True, real_part_only=True)
+
+        # create a copy
+        # osi_approx_nomalized_df2 = osi_approx_nomalized_df.copy()
+        # osi_approx_nomalized_df2["cell_type"] = osi_approx_nomalized_df2["pop_name"].apply(other_billeh_utils.pop_name_to_cell_type)
+        # osi_approx_nomalized_df2 = osi_approx_nomalized_df2.groupby("cell_type")['OSI'].mean()
+        # # Get the target OSI
+        # osi_target_df = self.get_neuropixels_osi()
+        # # Ensure the dataframes are aligned
+        # osi_approx_nomalized_df2 = osi_approx_nomalized_df2.sort_index()
+        # osi_target_df = osi_target_df.sort_index()
+        # # Calculate the quadratic difference
+        # quadratic_difference = (osi_approx_nomalized_df2 - osi_target_df) ** 2
+        # # print(quadratic_difference)
+        
         # Calculate the orientation and direction selectivity indices
         metrics_df = calculate_OSI_DSI(firing_rates_df, self.network, DG_angles=DG_angles, n_selected_neurons=n_neurons_plot,
-                                    remove_zero_rate_neurons=True)
-        # metrics_df.to_csv(os.path.join(self.directory, f"V1_OSI_DSI_DF.csv"), sep=" ", index=False)
+                                    remove_zero_rate_neurons=False)
+        # metrics_df.to_csv(os.path.join(self.directory, f"V1_OSI_DSI_DF.csv"), sep=" ", index=False)        
 
-        # Make the boxplots to compare with the neuropixels data
-        if len(DG_angles) == 1:
-            metrics = [self.neuropixels_feature]
-        else:
-            metrics = ["Rate at preferred direction (Hz)", "OSI", "DSI"]
-
-        boxplot = MetricsBoxplot(area=self.area, save_dir=self.directory, filename=self.filename)
-        boxplot.plot(metrics=metrics, metrics_df=metrics_df, axis=axis)
+        boxplot = MetricsBoxplot(area=self.area, save_dir=directory, filename=filename)
+        # if metrics == 
+        boxplot.plot(metrics=metrics, metrics_df=metrics_df, additional_dfs=[osi_approx_real_df], additional_dfs_labels=['Approximation'], axis=axis)
+        # boxplot.plot(metrics=metrics, metrics_df=metrics_df, axis=axis)
 
     def create_firing_rates_df(self, n_neurons, spikes, n_trials=10, drifting_gratings_init=50, 
                                drifting_gratings_end=550, DG_angles=np.arange(0, 360, 45)):
@@ -179,7 +197,127 @@ class ModelMetricsAnalysis:
             firing_rates_df = pd.concat([firing_rates_df, df], ignore_index=True)
 
         return firing_rates_df
-    
+
+    def calculate_osi_approximation(self, rates_df, normalized=False, real_part_only=False):
+        pop_names = other_billeh_utils.pop_names(self.network)[self.core_mask] 
+        # cell_types = np.array([other_billeh_utils.pop_name_to_cell_type(pop_name) for pop_name in pop_names])
+        node_ids = np.arange(len(pop_names))
+        tuning_angles = tf.constant(self.network['tuning_angle'][self.core_mask], dtype=tf.float32)
+        all_rates = np.array([g["Ave_Rate(Hz)"] for _, g in rates_df.groupby("DG_angle")]).T
+        average_rates = np.mean(all_rates, axis=1)
+        pop_names_ids = {key: node_ids[pop_names == key] for key in set(pop_names)}
+        pop_names_osis = {pop_name: [] for pop_name in set(pop_names)}
+        pop_names_dsis = {pop_name: [] for pop_name in set(pop_names)}
+        for angle, group in rates_df.groupby('DG_angle'):
+            angle = tf.cast(angle, tf.float32) 
+            delta_angle = tf.expand_dims(angle, axis=0) - tuning_angles
+            # i want the delta_angle to be within 0-360
+            # clipped_delta_angle = tf.math.floormod(delta_angle, 360)
+            radians_delta_angle = delta_angle * (np.pi / 180)
+            # Instead of complex numbers, use cosine and sine separately
+            osi_cos_component = tf.math.cos(2.0 * radians_delta_angle)
+            osi_sin_component = tf.math.sin(2.0 * radians_delta_angle)
+            dsi_cos_component = tf.math.cos(radians_delta_angle)
+            dsi_sin_component = tf.math.sin(radians_delta_angle)
+
+            rates = tf.constant(group['Ave_Rate(Hz)'].values, dtype=tf.float32)
+            average_rates = tf.constant(average_rates, dtype=tf.float32)
+            if normalized:
+                # Minimum threshold for each element of the normalizer
+                min_normalizer_value = 0.5
+                normalizer = tf.maximum(average_rates, min_normalizer_value)
+                rates = rates / normalizer
+            # For weighted responses, we separately consider the contributions from cosine and sine
+            weighted_osi_cos_responses = rates * osi_cos_component
+            weighted_osi_sin_responses = rates * osi_sin_component
+            weighted_dsi_cos_responses = rates * dsi_cos_component
+            weighted_dsi_sin_responses = rates * dsi_sin_component
+
+            for pop_name, ids in pop_names_ids.items():
+                ids = tf.constant(ids, dtype=tf.int32)
+                if tf.size(ids) != 0:
+                    _rates_type = tf.gather(rates, ids)
+                    _weighted_osi_cos_responses_type = tf.gather(weighted_osi_cos_responses, ids)
+                    _weighted_osi_sin_responses_type = tf.gather(weighted_osi_sin_responses, ids)
+                    _weighted_dsi_cos_responses_type = tf.gather(weighted_dsi_cos_responses, ids)
+                    _weighted_dsi_sin_responses_type = tf.gather(weighted_dsi_sin_responses, ids)
+
+                    # Define small epsilon values to avoid differentiability issues when 0 spikes are recorded within the population
+                    epsilon1 = 0.5
+                    approximated_denominator = tf.maximum(tf.reduce_mean(_rates_type), epsilon1)
+                    # Calculate the approximated OSI for the population
+                    if real_part_only:
+                        approximated_osi_numerator = tf.reduce_mean(_weighted_osi_cos_responses_type)
+                        approximated_dsi_numerator = tf.reduce_mean(_weighted_dsi_cos_responses_type)
+                        # approximated_denominator = tf.maximum(tf.reduce_sum(tf.abs(_weighted_cos_responses_type)), epsilon2)                        
+                    else:
+                        approximated_osi_numerator = tf.sqrt(tf.maximum(tf.square(tf.reduce_mean(_weighted_osi_cos_responses_type)) +
+                                                                    tf.square(tf.reduce_mean(_weighted_osi_sin_responses_type))
+                                                                    , 1e-6))
+                        approximated_dsi_numerator = tf.sqrt(tf.maximum(tf.square(tf.reduce_mean(_weighted_dsi_cos_responses_type)) +
+                                                                    tf.square(tf.reduce_mean(_weighted_dsi_sin_responses_type))
+                                                                    , 1e-6))
+
+                    osi_approx_type = approximated_osi_numerator / approximated_denominator
+                    dsi_approx_type = approximated_dsi_numerator / approximated_denominator
+
+                    pop_names_osis[pop_name].append(osi_approx_type.numpy())
+                    pop_names_dsis[pop_name].append(dsi_approx_type.numpy())
+ 
+        # Convert the dictionary to a DataFrame
+        osi_approx_df = pd.DataFrame(pop_names_osis)
+        dsi_approx_df = pd.DataFrame(pop_names_dsis)
+        osi_approx_df = osi_approx_df.melt(var_name='pop_name', value_name='OSI')
+        dsi_approx_df = dsi_approx_df.melt(var_name='pop_name', value_name='DSI')
+        approx_df = pd.merge(osi_approx_df, dsi_approx_df, on='pop_name')
+        # osi_approx_df.rename(columns={'Cell_Type': 'pop_name'}, inplace=True)
+        approx_df["node_id"] = np.arange(len(approx_df))
+        approx_df["preferred_angle"] = np.nan
+        approx_df["max_mean_rate(Hz)"] = np.nan
+        approx_df["Ave_Rate(Hz)"] = np.nan
+        approx_df['firing_rate_sp'] = np.nan
+
+        return approx_df
+
+    def neuropixels_cell_type_to_cell_type(self, pop_name):
+        # Convert pop_name in the neuropixels cell type to cell types. E.g, 'EXC_L23' -> 'L2/3 Exc', 'PV_L5' -> 'L5 PV'
+        layer = pop_name.split('_')[1]
+        class_name = pop_name.split('_')[0]
+        if "2" in layer:
+            layer = "L2/3"
+        elif layer == "L1":
+            return "L1 Htr3a"  # special case
+        if class_name == "EXC":
+            class_name = "Exc"
+        if class_name == 'VIP':
+            class_name = 'Htr3a'
+
+        return f"{layer} {class_name}"
+
+    def get_neuropixels_osi(self):
+        """
+        Processes neuropixels data to obtain neurons average firing rates.
+
+        Returns:
+            dict: Dictionary containing rates and node_type_ids for each population query.
+        """
+        # Load data
+        neuropixels_data_path = f'Neuropixels_data/{self.area}_OSI_DSI_DF.csv'
+        np_df = pd.read_csv(neuropixels_data_path, index_col=0, sep=" ")
+
+        osi_df = np_df[['cell_type', 'OSI', 'DSI', "Ave_Rate(Hz)", "max_mean_rate(Hz)"]]
+        nonresponding = osi_df["max_mean_rate(Hz)"] < 0.5
+        osi_df.loc[nonresponding, "OSI"] = np.nan
+        osi_df.loc[nonresponding, "DSI"] = np.nan
+        osi_df = osi_df[osi_df["Ave_Rate(Hz)"] != 0]
+        osi_df.dropna(inplace=True)
+        osi_df["cell_type"] = osi_df["cell_type"].apply(self.neuropixels_cell_type_to_cell_type)
+        osi_target = osi_df.groupby("cell_type")['OSI'].mean()
+        # dsi_target = osi_df.groupby("cell_type")['DSI'].mean()
+        # osi_target = osi_df.groupby("cell_type")['OSI'].median()
+
+        return osi_target
+
 
 class MetricsBoxplot:
     def __init__(self, area='v1', save_dir='Metrics_analysis', filename=''):
@@ -295,7 +433,7 @@ class MetricsBoxplot:
 
         return df
 
-    def plot(self, metrics=["Rate at preferred direction (Hz)", "OSI", "DSI"], metrics_df=None, axis=None):
+    def plot(self, metrics=["Rate at preferred direction (Hz)", "OSI", "DSI"], metrics_df=None, additional_dfs=[], additional_dfs_labels=[], axis=None):
         # Get the dataframes for the model and Neuropixels OSI and DSI 
         if metrics_df is None:
             metrics_df = f"{self.area}_OSI_DSI_DF.csv"
@@ -305,6 +443,9 @@ class MetricsBoxplot:
         # if self.area == 'v1':
         #     self.osi_dfs.append(self.get_osi_dsi_df(metric_file=f"v1_OSI_DSI_DF.csv", data_source_name="Billeh et al (2020)", data_dir='Billeh_column_metrics'))
             # self.osi_dfs.append(self.get_osi_dsi_df(metric_file=f"{self.area}_OSI_DSI_DF_pop_name.csv", data_source_name="NEST simulation", data_dir='NEST_metrics'))
+        if additional_dfs:
+            for i, df in enumerate(additional_dfs):
+                self.osi_dfs.append(self.get_osi_dsi_df(metric_file=df, data_source_name=additional_dfs_labels[i], data_dir='Additional_data'))
         
         df = pd.concat(self.osi_dfs, ignore_index=True)
         # df.to_csv(os.path.join('Borrar', f"help_DG_firing_rates_df.csv"), sep=" ", index=False)
@@ -327,6 +468,13 @@ class MetricsBoxplot:
             "Billeh et al (2020)": "tab:blue",
             # "NEST simulation": "tab:pink"
         }
+        # generate a color palette with as many colors as there are new labels
+        if additional_dfs:
+            additional_colors = sns.hls_palette(len(additional_dfs_labels))
+            # add new labels to color_pal
+            for label, color in zip(additional_dfs_labels, additional_colors):
+                color_pal[label] = color
+
 
         # Establish the order of the neuron types in the boxplots
         cell_type_order = np.sort(df['cell_type'].unique())
@@ -369,6 +517,24 @@ def plot_one_metric(ax, df, metric_name, ylim, cpal=None, hue_order=None):
         width=0.7,
         palette=cpal,
     )
+
+    # Add pointplot for averages
+    sns.pointplot(
+        x="cell_type",
+        y=metric_name,
+        hue="data_type",
+        order=hue_order,
+        data=df,
+        ax=ax,
+        dodge=0.4,  # adjust depending on the width of the boxplots
+        linestyle='none',  # don't join the points with a line
+        palette='dark',  # make the points dark
+        markers='d',  # diamond-shaped markers
+        markersize=0.75,  # adjust size of the points
+        errorbar=None,  # no error bars
+        legend=False
+    )
+
     ax.tick_params(axis="x", labelrotation=90)
     ax.set_ylim(ylim)
     ax.set_xlabel("")

@@ -27,8 +27,8 @@ class InputActivityFigure:
         self.input_ax = self.figure.add_subplot(gs[:2])
         # self.v1_activity_ax = self.figure.add_subplot(gs[2:6])
         # self.lm_activity_ax = self.figure.add_subplot(gs[6:-1])
-        self.v1_activity_ax = self.figure.add_subplot(gs[2:8])
-        self.lm_activity_ax = self.figure.add_subplot(gs[8:-1])
+        self.v1_activity_ax = self.figure.add_subplot(gs[2:6])
+        self.lm_activity_ax = self.figure.add_subplot(gs[6:-1])
         self.drifting_grating_ax = self.figure.add_subplot(gs[-1])
 
         self.inputs_plot = RasterPlot(
@@ -235,7 +235,7 @@ class LaminarPlot:
         self.n_neurons = network["n_nodes"]
 
         if self.area_name == 'v1':
-            self.core_neurons = 51978
+            self.core_neurons = 7414 #51978
             # core_radius = 400
         elif self.area_name == 'lm':
             v1_to_lm_neurons_ratio = 7.010391285652859
@@ -619,8 +619,7 @@ class PopulationActivity:
             class_spikes = self.spikes[:, neuron_ids]
             m, n = class_spikes.shape
             H, W = int(m/bin_size), 1  # block-size
-            n_spikes_bin = class_spikes.reshape(
-                H, m//H, W, n//W).sum(axis=(1, 3))
+            n_spikes_bin = class_spikes.reshape(H, m//H, W, n//W).sum(axis=(1, 3))
             population_activity = n_spikes_bin/(n_neurons_class*bin_size*0.001)
 
             fig = plt.figure()
@@ -632,6 +631,7 @@ class PopulationActivity:
             os.makedirs(path, exist_ok=True)
             fig.tight_layout()
             fig.savefig(os.path.join(path, f'{label}_population_activity.png'), dpi=300)
+            plt.close(fig)
 
     def subplot_populations_activity(self, bin_size=10):
         layers_label = ['Inhibitory L1 neurons', 'Inhibitory L23 neurons', 'Excitatory L23 neurons',

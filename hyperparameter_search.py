@@ -3,6 +3,7 @@ import json
 import os
 import re
 import argparse
+import itertools
 # import numpy as np
 # import tensorflow as tf
 # import tensorflow as tf
@@ -29,7 +30,7 @@ parser.add_argument('--rate_cost', default=100., type=float) #100
 parser.add_argument('--voltage_cost', default=1., type=float)
 parser.add_argument('--osi_cost', default=1., type=float)
 parser.add_argument('--osi_loss_subtraction_ratio', default=0., type=float)
-parser.add_argument('--osi_loss_method', default='crowd_osi', type=str)
+parser.add_argument('--osi_loss_method', default='crowd_spikes', type=str)
 
 parser.add_argument('--dampening_factor', default=0.1, type=float)
 parser.add_argument('--recurrent_dampening_factor', default=0.5, type=float)
@@ -64,17 +65,16 @@ parser.add_argument('--neurons_per_output', default=16, type=int)
 parser.add_argument('--float16', default=False, action='store_true')
 parser.add_argument('--caching', default=True, action='store_true')
 parser.add_argument('--core_only', default=False, action='store_true')
-parser.add_argument('--core_loss', default=False, action='store_true')
+parser.add_argument('--core_loss', default=True, action='store_true')
 parser.add_argument('--hard_reset', default=False, action='store_true')
 parser.add_argument('--disconnect_lm_L6_inhibition', default=False, action='store_true')
 parser.add_argument('--disconnect_v1_lm_L6_excitatory_projections', default=False, action='store_true')
-parser.add_argument('--realistic_neurons_ratio', default=True, action='store_false')
+parser.add_argument('--realistic_neurons_ratio', default=True, action='store_true')
 
 parser.add_argument('--train_recurrent_v1', default=False, action='store_true')
 parser.add_argument('--train_recurrent_lm', default=False, action='store_true')
 parser.add_argument('--train_input', default=False, action='store_true')
-parser.add_argument('--train_interarea_lm_v1', default=False, action='store_true')
-parser.add_argument('--train_interarea_v1_lm', default=False, action='store_true')
+parser.add_argument('--train_interarea', default=False, action='store_true')
 parser.add_argument('--train_noise', default=False, action='store_true')
 
 parser.add_argument('--connected_selection', default=True, action='store_true')
@@ -83,9 +83,8 @@ parser.add_argument('--neuron_output', default=True, action='store_true')
 parser.add_argument('--visualize_test', default=False, action='store_true')
 parser.add_argument('--pseudo_gauss', default=False, action='store_true')
 parser.add_argument('--bmtk_compat_lgn', default=True, action='store_true')
+parser.add_argument('--average_grad_for_cell_type', default=False, action='store_true')
 parser.add_argument('--reset_every_step', default=False, action='store_true')
-parser.add_argument('--spontaneous_training', default=False, action='store_true')
-parser.add_argument('--rotation', default='ccw', type=str)
 
 
 def submit_job(command):
@@ -120,7 +119,7 @@ def main():
     # Save the configuration of the model based on the main features
     flag_str = f'v1_{v1_neurons}_lm_{lm_neurons}'
     for name, value in vars(flags).items():
-        if value != parser.get_default(name) and name in ['n_input', 'core_only', 'connected_selection', 'interarea_weight_distribution', 'E4_weight_factor']:
+        if value != parser.get_default(name) and name in ['n_input', 'seq_len', 'interarea_weight_distribution', 'E4_weight_factor']:
             flag_str += f'_{name}_{value}'
 
     # Define flag string as the second part of results_path
@@ -137,11 +136,11 @@ def main():
     print(f'> Results for {flags.task_name} will be stored in:\n {logdir} \n')
 
     # Define the job submission commands for the training and evaluation scripts
-    training_commands = ["run", "-g", "1", "-m", "24", "-t", "5:00"]
-    evaluation_commands = ["run", "-g", "1", "-m", "70", "-t", "1:00"]
+    training_commands = ["run", "-g", "1", "-m", "24", "-t", "8:00"]
+    evaluation_commands = ["run", "-g", "1", "-m", "48", "-t", "8:00"]
 
     # Define the training and evaluation script calls
-    training_script = "python multi_training_single_gpu_split.py " 
+    training_script = "python multi_training.py " 
     evaluation_script = "python osi_dsi_estimator.py " 
 
     # Append each flag to the string
@@ -159,25 +158,30 @@ def main():
                 training_script += f"--{name} {value} "
                 evaluation_script += f"--{name} {value} "
 
+
+    # Define your hyperparameters and their ranges
+    hyperparameters = {
+        'learning_rate': [0.001, 0.01]
+        'osi_cost': [0.001, 0.01],  # Learning rate
+        'rate_cost': [16, 32],  # Batch size
+        'voltage_cost': [1, 2],  # Number of layers
+        'recurrent_weight_regularization': [50, 100]  # Number of units per layer
+    }
+    # Generate all combinations of hyperparameters
+    all_combinations = list(itertools.product(*(hyperparameters[name] for name in hyperparameters)))
+
+
     job_ids = []
     eval_job_ids = []
-
-    # # Initial OSI/DSI test
-    # initial_evaluation_command = evaluation_commands + ["-o", f"Out/{sim_name}_{v1_neurons}_initial_test.out", "-e", f"Error/{sim_name}_{v1_neurons}_initial_test.err", "-j", f"{sim_name}_initial_test"]
-    # initial_evaluation_script = evaluation_script + f"--seed {flags.seed} --ckpt_dir {logdir}  --run_session {-1}"
-    # initial_evaluation_command = initial_evaluation_command + [initial_evaluation_script]
-    # eval_job_id = submit_job(initial_evaluation_command)
-    # eval_job_ids.append(eval_job_id)
-
     for i in range(flags.n_runs):
         # Submit the training and evaluation jobs with dependencies: train0 - train1 & eval0 - rtrain2 & eval1 - ...
         if i == 0:
-            new_training_command = training_commands + ["-o", f"Out/{sim_name}_{v1_neurons}_train_{i}.out", "-e", f"Error/{sim_name}_{v1_neurons}_train_{i}.err", "-j", f"{sim_name}_train_{i}"]
+            new_training_command = training_commands + ["-o", f"Out/train_{i}_{v1_neurons}_w2.out", "-e", f"Error/train_{i}_{v1_neurons}_w2.err", "-j", f"train_{i}_{v1_neurons}_w2"]
             new_training_script = training_script + f"--seed {flags.seed + i} --ckpt_dir {logdir} --run_session {i}"
             new_training_command = new_training_command + [new_training_script]
             job_id = submit_job(new_training_command)
         else:
-            new_training_command = training_commands + ['-d', job_ids[i-1], "-o", f"Out/{sim_name}_{v1_neurons}_train_{i}.out", "-e", f"Error/{sim_name}_{v1_neurons}_train_{i}.err", "-j", f"{sim_name}_train_{i}"]
+            new_training_command = training_commands + ['-d', job_ids[i-1], "-o", f"Out/train_{i}_{v1_neurons}.out", "-e", f"Error/train_{i}_{v1_neurons}.err", "-j", f"train_{i}_{v1_neurons}"]
             # new_training_script = training_script + f"--osi_cost 0.1 --rate_cost 10 --seed {flags.seed + i} --ckpt_dir {logdir} --run_session {i}"
             new_training_script = training_script + f"--seed {flags.seed + i} --ckpt_dir {logdir} --run_session {i}"
             new_training_command = new_training_command + [new_training_script]
@@ -185,14 +189,14 @@ def main():
         job_ids.append(job_id)
 
         if flags.n_runs == 1: # the run is a single run, no need to submit evaluation jobs. osi_dsi will be evaluated at the end of training run
-           continue
+            continue
         else:
-           new_evaluation_command = evaluation_commands + ['-d', job_id, "-o", f"Out/{sim_name}_{v1_neurons}_test_{i}.out", "-e", f"Error/{sim_name}_{v1_neurons}_test_{i}.err", "-j", f"{sim_name}_test_{i}"]
-           new_evaluation_script = evaluation_script + f"--seed {flags.seed + i} --ckpt_dir {logdir} --run_session {i}"
-           new_evaluation_command = new_evaluation_command + [new_evaluation_script]
-           eval_job_id = submit_job(new_evaluation_command)
-           eval_job_ids.append(eval_job_id)
-#
+            new_evaluation_command = evaluation_commands + ['-d', job_id, "-o", f"Out/eval_{i}_{v1_neurons}.out", "-e", f"Error/eval_{i}_{v1_neurons}.err", "-j", f"eval_{i}_{v1_neurons}"]
+            new_evaluation_script = evaluation_script + f"--seed {flags.seed + i} --ckpt_dir {logdir} --run_session {i}"
+            new_evaluation_command = new_evaluation_command + [new_evaluation_script]
+            eval_job_id = submit_job(new_evaluation_command)
+            eval_job_ids.append(eval_job_id)
+
     print("Submitted training jobs with the following JOBIDs:", job_ids)
     print("Submitted evaluation jobs with the following JOBIDs:", eval_job_ids)
 
