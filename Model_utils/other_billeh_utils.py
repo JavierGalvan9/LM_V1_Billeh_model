@@ -278,76 +278,11 @@ def load_simulation_results_hdf5(full_data_path, n_trials=None, skip_first_simul
 
     return data, flags_dict, n_trials
 
-class SaveSimDataHDF5_gabors2:
-    def __init__(self, flags, data_path, networks, save_core_only=True):
-        self.v1_neurons = networks['v1']['n_nodes']
-        self.lm_neurons = networks['lm']['n_nodes']
-        self.v1_core_neurons = 51978
-        self.lm_core_neurons = 7414
-        self.data_path = data_path
-
-        if self.v1_neurons > self.v1_core_neurons and save_core_only:
-            # Isolate the core neurons from v1
-            self.v1_core_mask = isolate_core_neurons(networks['v1'], n_selected_neurons=self.v1_core_neurons, data_dir=flags.data_dir) 
-        else:
-            self.v1_core_neurons = self.v1_neurons
-            self.v1_core_mask = np.full(self.v1_core_neurons, True)
-        
-        if self.lm_neurons > self.lm_core_neurons and save_core_only:
-            # Isolate the core neurons from lm
-            self.lm_core_mask = isolate_core_neurons(networks['lm'], n_selected_neurons=self.lm_core_neurons, data_dir=flags.data_dir)
-        else:
-            self.lm_core_neurons = self.lm_neurons
-            self.lm_core_mask = np.full(self.lm_core_neurons, True)
-
-        # Define the shape of the data matrix
-        self.v1_data_shape = (flags.n_trials, flags.seq_len, self.v1_core_neurons)
-        self.lm_data_shape = (flags.n_trials, flags.seq_len, self.lm_core_neurons)
-        self.LGN_data_shape = (flags.n_trials, flags.seq_len, flags.n_input)
-
-        n_col = flags.circle_column
-        n_row = flags.circle_row
-        orientation = flags.orientation
-
-        with h5py.File(os.path.join(self.data_path, 'simulation_data_'+str(n_col)+'_'+str(n_row)+'_'+str(orientation)+'.hdf5'), 'w') as f:
-            g = f.create_group('Data')
-            # create a group for v1 and other for lm
-            v1g = g.create_group('v1')
-            lmg = g.create_group('lm')
-            LGNg = g.create_group('LGN')
-            v1g.create_dataset('z', self.v1_data_shape, dtype=np.uint8, 
-                                chunks=True, compression='gzip', shuffle=True)
-            lmg.create_dataset('z', self.lm_data_shape, dtype=np.uint8, 
-                                chunks=True, compression='gzip', shuffle=True)
-            LGNg.create_dataset('z', self.LGN_data_shape, dtype=np.uint8, 
-                                chunks=True, compression='gzip', shuffle=True)
-                
-            for flag, val in flags.flag_values_dict().items():
-                if isinstance(val, (float, int, str, bool)):
-                    g.attrs[flag] = val
-            g.attrs['Date'] = time.time()
-                
-    def __call__(self, simulation_data, trial, n_col, n_row, orientation):
-        with h5py.File(os.path.join(self.data_path, 'simulation_data_'+str(n_col)+'_'+str(n_row)+'_'+str(orientation)+'.hdf5'), 'a') as f:
-            # iterate over the keys of simulation_data
-            for area in simulation_data.keys():
-                for key, val in simulation_data[area].items():
-                    if area == 'LGN':
-                        val = np.array(val).astype(np.uint8)
-                        # val = np.packbits(val)
-                    elif area == 'v1':
-                        val = np.array(val)[:, :, self.v1_core_mask].astype(np.uint8)
-                    elif area == 'lm':
-                        val = np.array(val)[:, :, self.lm_core_mask].astype(np.uint8)
-
-                    # Save the data
-                    f['Data'][area][key][trial, :, :] = val
-
 
 
 
 class SaveGaborSimDataHDF5:
-    def __init__(self, flags, data_path, networks, n_rows=10, n_cols=10, save_core_only=True):
+    def __init__(self, flags, data_path, networks, n_rows=1, n_cols=1, n_directions=4, save_core_only=True):
         self.v1_neurons = networks['v1']['n_nodes']
         self.lm_neurons = networks['lm']['n_nodes']
         self.v1_core_neurons = 51978
@@ -377,6 +312,7 @@ class SaveGaborSimDataHDF5:
 
         row_ids = np.arange(0, n_rows)
         col_ids = np.arange(0, n_cols)
+        # directions = np.arange(0, 180, 45)
 
         with h5py.File(os.path.join(self.data_path, 'simulation_data.hdf5'), 'w') as f:
             g = f.create_group('Data')
@@ -386,7 +322,7 @@ class SaveGaborSimDataHDF5:
                 for row in row_ids:
                     for col in col_ids:
                         area.create_dataset(f'{row}_{col}', data_shape, dtype=np.uint8, 
-                                            chunks=True, compression='gzip', shuffle=True)
+                                                    chunks=True, compression='gzip', shuffle=True)
                 
             for flag, val in flags.flag_values_dict().items():
                 if isinstance(val, (float, int, str, bool)):
@@ -429,6 +365,8 @@ def load_gabor_simulation_results_hdf5(full_data_path, n_trials=None, skip_first
         for area in dataset.keys():
             data[area] = {}
             for row_col in dataset[area].keys():
-                data[area][row_col] = np.array(dataset[area][row_col][first_simulation:last_simulation, :,:]).astype(np.uint8)
+                data[area][row_col] = {}
+                for direction in dataset[area][row_col].keys():
+                    data[area][row_col][direction] = np.array(dataset[area][row_col][direction][first_simulation:last_simulation, :,:]).astype(np.uint8)
                 
     return data, flags_dict, n_trials

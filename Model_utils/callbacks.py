@@ -15,9 +15,9 @@ from Model_utils.plotting_utils import InputActivityFigure, PopulationActivity
 from Model_utils.model_metrics_analysis import ModelMetricsAnalysis, OneShotTuningAnalysis
 
 
-def printgpu(verbose=0):
+def printgpu(gpu_id=0, verbose=0):
     if tf.config.list_physical_devices('GPU'):
-        meminfo = tf.config.experimental.get_memory_info('GPU:0')
+        meminfo = tf.config.experimental.get_memory_info(f'GPU:{gpu_id}')
         current = meminfo['current'] / 1024**3
         peak = meminfo['peak'] / 1024**3
         if verbose == 0:
@@ -68,7 +68,7 @@ def process_receptors(postsynaptic_indices, receptor_ids):
 class Callbacks:
     def __init__(self, model, optimizer, distributed_roll_out, flags, logdir, flag_str, strategy, 
                 metrics_keys, pre_delay=50, post_delay=50, checkpoint=None, model_variables_init=None, 
-                save_optimizer=True, spontaneous_fr=False):
+                save_optimizer=True, spontaneous_training=False):
         parts = flag_str.split('_')
         n_neurons = {'v1': int(parts[1]), 'lm': int(parts[3])}
         self.n_neurons = n_neurons
@@ -78,7 +78,7 @@ class Callbacks:
         else:
             load_fn = load_sparse.load_billeh
         self.networks, self.lgn_inputs, self.bkg_inputs = load_fn(flags, n_neurons, flag_str=flag_str)      
-        if spontaneous_fr:
+        if spontaneous_training:
             self.neuropixels_feature = 'Spontaneous rate (Hz)'
         else:
             self.neuropixels_feature = 'Ave_Rate(Hz)'  
@@ -132,7 +132,7 @@ class Callbacks:
         self.train_start_time = time()
         self.epoch = self.flags.run_session * self.flags.n_epochs
 
-    def on_train_end(self, metric_values):
+    def on_train_end(self, metric_values, normalizers=None):
         self.train_end_time = time()
         self.final_metric_values = metric_values
         print("\n ---------- Training ended at ", dt.datetime.now().strftime('%d-%m-%Y %H:%M'), ' ----------\n')
@@ -155,6 +155,11 @@ class Callbacks:
             'min_val_loss': self.min_val_loss,
             'no_improve_epochs': self.no_improve_epochs
         }
+
+        if normalizers is not None:
+            data_to_save['v1_ema'] = normalizers['v1_ema']
+            data_to_save['lm_ema'] = normalizers['lm_ema']
+
         with open(os.path.join(self.logdir, 'train_end_data.pkl'), 'wb') as f:
             pkl.dump(data_to_save, f)
 
@@ -167,9 +172,9 @@ class Callbacks:
         self.epoch_init_time = time()
         date_str = dt.datetime.now().strftime('%d-%m-%Y %H:%M')
         print(f'Epoch {self.epoch:2d}/{self.total_epochs} @ {date_str}')
-        tf.print(f'Epoch {self.epoch:2d}/{self.total_epochs} @ {date_str} - {self.optimizer.lr.numpy()}')
+        tf.print(f'Epoch {self.epoch:2d}/{self.total_epochs} @ {date_str}')
 
-    def on_epoch_end(self, x, v1_spikes, lm_spikes, y, metric_values, bkg_noise=None, verbose=True):
+    def on_epoch_end(self, x, v1_spikes, lm_spikes, x_spont, v1_spikes_spont, lm_spikes_spont, y, metric_values, bkg_noise=None, verbose=True):
         self.step = 0
         if self.initial_metric_values is None:
             self.initial_metric_values = metric_values
@@ -179,8 +184,10 @@ class Callbacks:
             val_values = metric_values[len(metric_values)//2:]
             print_str += '    ' + compose_str(val_values) 
             print(print_str)
-            mem_data = printgpu(verbose=1)
-            print(f'    Memory consumption (current - peak): {mem_data[0]:.2f} GB - {mem_data[1]:.2f} GB'+ '\n')
+            for gpu_id in range(len(self.strategy.extended.worker_devices)):
+                mem_data = printgpu(gpu_id=gpu_id, verbose=1)
+                print(f'    Memory consumption (current - peak) GPU {gpu_id}: {mem_data[0]:.2f} GB - {mem_data[1]:.2f} GB')
+            
 
         self.epoch_metric_values = {key: value + [metric_values[i]] for i, (key, value) in enumerate(self.epoch_metric_values.items())}
 
@@ -203,11 +210,14 @@ class Callbacks:
             # self.plot_lgn_activity(x)
             self.save_best_model()
             self.plot_raster(x, v1_spikes, lm_spikes, y)
+            self.composed_raster(x, v1_spikes, lm_spikes, x_spont, v1_spikes_spont, lm_spikes_spont, y)
             self.plot_mean_firing_rate_boxplot(v1_spikes, lm_spikes, y)
+            self.plot_mean_osi_boxplot(v1_spikes, lm_spikes, y)
+            
             self.plot_tuning_analysis(v1_spikes, lm_spikes, y)
             # self.plot_populations_activity(v1_spikes, lm_spikes)
 
-            self.model_variables_dict['Best'] = {var.name: var.numpy() for var in self.model.trainable_variables}
+            self.model_variables_dict['Best'] = {var.name: var.numpy().astype(np.float16) for var in self.model.trainable_variables}
             for var in self.model_variables_dict['Best'].keys():
                 t0 = time()
                 self.variable_change_analysis(var)
@@ -216,8 +226,8 @@ class Callbacks:
             self.no_improve_epochs += 1
            
         # Plot osi_dsi if only 1 run and the osi/dsi period is reached
-        # if self.flags.n_runs == 1 and (self.epoch % self.flags.osi_dsi_eval_period == 0 or self.epoch==1):
-        #     self.plot_osi_dsi(parallel=False)
+        if self.flags.n_runs == 1 and (self.epoch % self.flags.osi_dsi_eval_period == 0 or self.epoch==1):
+            self.plot_osi_dsi(parallel=False)
 
         with self.summary_writer.as_default():
             for k, v in zip(self.metrics_keys, metric_values):
@@ -227,7 +237,7 @@ class Callbacks:
         if (0 < self.flags.max_time < (time() - self.epoch_init_time) / 3600):
             print(f'[ Maximum optimization time of {self.flags.max_time:.2f}h reached ]')
             stop = True
-        elif self.no_improve_epochs >= 200:
+        elif self.no_improve_epochs >= 500:
             print("Early stopping: Validation loss has not improved for 50 epochs.")
             stop = True  
         else:
@@ -248,8 +258,9 @@ class Callbacks:
             print_str += '    ' + compose_str(train_values)
             print(print_str)
             print(f'    Step running time: {time() - self.step_init_time:.2f}s')
-            mem_data = printgpu(verbose=1)
-            print(f'    Memory consumption (current - peak): {mem_data[0]:.2f} GB - {mem_data[1]:.2f} GB')
+            for gpu_id in range(len(self.strategy.extended.worker_devices)):
+                mem_data = printgpu(gpu_id=gpu_id, verbose=1)
+                print(f'    Memory consumption (current - peak) GPU {gpu_id}: {mem_data[0]:.2f} GB - {mem_data[1]:.2f} GB')
         
     def save_best_model(self):
         # self.step_counter.assign_add(1)
@@ -290,6 +301,26 @@ class Callbacks:
                                     frequency=self.flags.temporal_f,
                                     stimuli_init_time=self.pre_delay,
                                     stimuli_end_time=self.flags.seq_len-self.post_delay,
+                                    reverse=False,
+                                    plot_core_only=True,
+                                    )
+        graph(x, v1_spikes, lm_spikes)
+
+    def composed_raster(self, x, v1_spikes, lm_spikes, x_spont, v1_spikes_spont, lm_spikes_spont, y):
+        # concatenate the normal and spontaneous arrays
+        x = np.concatenate((x_spont.numpy(), x.numpy()), axis=1)
+        v1_spikes = np.concatenate((v1_spikes_spont.numpy(), v1_spikes.numpy()), axis=1)
+        lm_spikes = np.concatenate((lm_spikes_spont.numpy(), lm_spikes.numpy()), axis=1)
+        images_dir = os.path.join(self.logdir, 'Raster_plots')
+        os.makedirs(images_dir, exist_ok=True)
+        graph = InputActivityFigure(
+                                    self.networks,
+                                    self.flags.data_dir,
+                                    images_dir,
+                                    filename=f'Epoch_{self.epoch}_complete',
+                                    frequency=self.flags.temporal_f,
+                                    stimuli_init_time=self.flags.seq_len+self.pre_delay,
+                                    stimuli_end_time=2*self.flags.seq_len-self.post_delay,
                                     reverse=False,
                                     plot_core_only=True,
                                     )
@@ -476,10 +507,40 @@ class Callbacks:
         os.makedirs(boxplots_dir, exist_ok=True)
         fig, axs = plt.subplots(2, 1, figsize=(12, 14))
         for axis_id, spikes, area in zip([0, 1], [v1_spikes, lm_spikes], ['v1', 'lm']):
-            metrics_analysis = ModelMetricsAnalysis(self.networks[area], neuropixels_feature=self.neuropixels_feature, data_dir=self.flags.data_dir, n_trials=1,
+            metrics_analysis = ModelMetricsAnalysis(self.networks[area], data_dir=self.flags.data_dir, n_trials=1,
                                                     analyze_core_only=True, drifting_gratings_init=self.pre_delay, drifting_gratings_end=self.flags.seq_len-self.post_delay, 
-                                                    area=area, directory=boxplots_dir, filename=f'{area}_epoch_{self.epoch}')
-            metrics_analysis(spikes, y, axis=axs[axis_id])     
+                                                    area=area)
+            metrics_analysis(spikes, y, metrics=[self.neuropixels_feature], axis=axs[axis_id], directory=boxplots_dir, filename=f'{area}_epoch_{self.epoch}')     
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(boxplots_dir, f'epoch_{self.epoch}.png'), dpi=300, transparent=False)
+        plt.close()
+
+        # boxplots_dir = os.path.join(self.logdir, f'Boxplots/Prestimulus')
+        # os.makedirs(boxplots_dir, exist_ok=True)
+        # fig, axs = plt.subplots(2, 1, figsize=(12, 14))
+        # for axis_id, spikes, area in zip([0, 1], [v1_spikes, lm_spikes], ['v1', 'lm']):
+        #     metrics_analysis = ModelMetricsAnalysis(self.networks[area], data_dir=self.flags.data_dir, n_trials=1,
+        #                                             analyze_core_only=True, drifting_gratings_init=0, drifting_gratings_end=self.pre_delay, 
+        #                                             area=area)
+        #     metrics_analysis(spikes, y, metrics=['Spontaneous rate (Hz)'], axis=axs[axis_id], directory=boxplots_dir, filename=f'{area}_epoch_{self.epoch}')     
+
+        # plt.tight_layout()
+        # plt.savefig(os.path.join(boxplots_dir, f'epoch_{self.epoch}.png'), dpi=300, transparent=False)
+        # plt.close()
+
+    def plot_mean_osi_boxplot(self, v1_spikes, lm_spikes, y):
+        v1_spikes = v1_spikes.numpy()
+        lm_spikes = lm_spikes.numpy()
+        y = y.numpy()
+        boxplots_dir = os.path.join(self.logdir, f'Boxplots/OSI')
+        os.makedirs(boxplots_dir, exist_ok=True)
+        fig, axs = plt.subplots(2, 1, figsize=(12, 14))
+        for axis_id, spikes, area in zip([0, 1], [v1_spikes, lm_spikes], ['v1', 'lm']):
+            metrics_analysis = ModelMetricsAnalysis(self.networks[area], data_dir=self.flags.data_dir, n_trials=1,
+                                                    analyze_core_only=True, drifting_gratings_init=self.pre_delay, drifting_gratings_end=self.flags.seq_len-self.post_delay, 
+                                                    area=area)
+            metrics_analysis(spikes, y, metrics=["OSI"], axis=axs[axis_id], directory=boxplots_dir, filename=f'{area}_epoch_{self.epoch}')     
 
         plt.tight_layout()
         plt.savefig(os.path.join(boxplots_dir, f'epoch_{self.epoch}.png'), dpi=300, transparent=False)
@@ -499,18 +560,21 @@ class Callbacks:
                                                     )
             tuning_analyzer(spikes, y)
             tuning_analyzer.plot_tuning_curves(self.epoch, remove_zero_rate_neurons=True)
-            tuning_analyzer.plot_max_rate_boxplots(self.epoch, remove_zero_rate_neurons=True, axis=axs[axis_id])
+            # tuning_analyzer.plot_max_rate_boxplots(self.epoch, remove_zero_rate_neurons=True, axis=axs[axis_id])
         
-        images_dir = os.path.join(images_dir, 'Max_rate_boxplot')
-        os.makedirs(images_dir, exist_ok=True)
-        plt.tight_layout()
-        plt.savefig(os.path.join(images_dir, f'epoch_{self.epoch}.png'), dpi=300, transparent=False)
-        plt.close()
+        # images_dir = os.path.join(images_dir, 'Max_rate_boxplot')
+        # os.makedirs(images_dir, exist_ok=True)
+        # plt.tight_layout()
+        # plt.savefig(os.path.join(images_dir, f'epoch_{self.epoch}.png'), dpi=300, transparent=False)
+        # plt.close()
 
     def variable_change_analysis(self, variable):
-        if 'rest_of_brain_weights' in variable or 'sparse_input_weights' in variable:
+        if 'rest_of_brain_weights' in variable:
             area = variable.split('_')[0]
-            self.node_to_pop_weights_analysis(variable=variable, area=area)
+            self.node_to_pop_weights_analysis(self.bkg_inputs[area]['indices'], variable=variable, area=area)
+        elif'sparse_input_weights' in variable:
+            area = variable.split('_')[0]
+            self.node_to_pop_weights_analysis(self.lgn_inputs[area]['indices'], variable=variable, area=area)
         elif 'sparse_recurrent_weights' in variable:
             area = variable.split('_')[0] 
             self.pop_to_pop_weights_analysis(self.networks[area]['synapses']['indices'], variable=variable, 
@@ -521,15 +585,24 @@ class Callbacks:
             self.pop_to_pop_weights_analysis(self.networks[target_area]['interarea_synapses'][source_area]['indices'], variable=variable, 
             source_area=source_area, target_area=target_area)
     
-    def node_to_pop_weights_analysis(self, variable='', area=''):
+    def node_to_pop_weights_analysis(self, indices, variable='', area=''):
         pop_names = other_billeh_utils.pop_names(self.networks[area])
-        pop_names = [other_billeh_utils.pop_name_to_cell_type(pop_name) for pop_name in pop_names]
+        target_cell_types = [other_billeh_utils.pop_name_to_cell_type(pop_name) for pop_name in pop_names]
+        if 'rest_of_brain_weights' in variable:
+            post_indices =  np.repeat(indices[:, 0], 4)
+        else:
+            post_indices = indices[:, 0]
+
+        post_cell_types = [target_cell_types[i] for i in post_indices]
         # Create DataFrame with all the necessary data
         df = pd.DataFrame({
-            'Cell type': pop_names * 2,  # Duplicate node names for initial and final weights
+            'Cell type': post_cell_types * 2,  # Duplicate node names for initial and final weights
             'Weight': self.model_variables_dict['Initial'][variable].tolist() + self.model_variables_dict['Best'][variable].tolist(),  # Combine initial and final weights
             'State': ['Initial'] * len(self.model_variables_dict['Initial'][variable]) + ['Final'] * len(self.model_variables_dict['Best'][variable])  # Distinguish between initial and final weights
         })
+
+        # Count the number of cell_types fro each type
+        cell_type_counts = df['Cell type'].value_counts()
 
         # Sort the dataframe by Node Name and then by Type to ensure consistent order
         df = df.sort_values(['Cell type', 'State'])
@@ -636,20 +709,6 @@ class Callbacks:
         cbar.set_label('Weight Change')
         plt.savefig(os.path.join(boxplots_dir, f'Weight_change.png'), dpi=300, transparent=False)
         plt.close()
-
-    # def get_osi_dsi_dataset_fn(self, regular=False):
-    #     def _f(input_context):
-    #         post_delay = self.flags.seq_len - (2500 % self.flags.seq_len)
-    #         _data_set = stim_dataset.generate_drifting_grating_tuning(
-    #             seq_len=2500+post_delay,
-    #             pre_delay=500,
-    #             post_delay = post_delay,
-    #             n_input=self.flags.n_input,
-    #             regular=regular
-    #         ).batch(1)
-                        
-    #         return _data_set
-    #     return _f
     
     def plot_osi_dsi(self, parallel=False):
         print('Starting to plot OSI and DSI...')
@@ -667,20 +726,22 @@ class Callbacks:
                 # Define OSI/DSI dataset
                 def get_osi_dsi_dataset_fn(regular=False):
                     def _f(input_context):
-                        post_delay = flags.seq_len - (2500 % self.flags.seq_len)
+                        post_delay = self.flags.seq_len - (2500 % self.flags.seq_len)
                         _lgn_firing_rates = stim_dataset.generate_drifting_grating_tuning(
                             seq_len=2500+post_delay,
                             pre_delay=500,
                             post_delay = post_delay,
                             n_input=self.flags.n_input,
                             regular=regular,
-                            return_firing_rates=True
+                            return_firing_rates=True,
+                            rotation=self.flags.rotation,
+                            billeh_phase=True,
                         ).batch(1)
                                     
                         return _lgn_firing_rates
                     return _f
             
-                osi_dsi_data_set = strategy.distribute_datasets_from_function(get_osi_dsi_dataset_fn(regular=True))
+                osi_dsi_data_set = self.strategy.distribute_datasets_from_function(get_osi_dsi_dataset_fn(regular=True))
                 test_it = iter(osi_dsi_data_set)
                 lgn_firing_rates_dict = {}  # Dictionary to store firing rates
                 for angle_id, angle in enumerate(DG_angles):
@@ -689,8 +750,9 @@ class Callbacks:
                     lgn_firing_rates_dict[angle] = lgn_firing_rates.numpy()
                     print(f'Angle {angle} done.')
                     print(f'    Trial running time: {time() - t0:.2f}s')
-                    mem_data = printgpu(verbose=1)
-                    print(f'    Memory consumption (current - peak): {mem_data[0]:.2f} GB - {mem_data[1]:.2f} GB\n')
+                    for gpu_id in range(len(self.strategy.extended.worker_devices)):
+                        mem_data = printgpu(gpu_id=gpu_id, verbose=1)
+                        print(f'    Memory consumption (current - peak) GPU {gpu_id}: {mem_data[0]:.2f} GB - {mem_data[1]:.2f} GB')
 
                 # Save the dataset      
                 results_dir = os.path.join("OSI_DSI_dataset")
@@ -709,18 +771,19 @@ class Callbacks:
             v1_spikes = np.zeros((8, sim_duration, self.networks['v1']['n_nodes']), dtype=float)
             lm_spikes = np.zeros((8, sim_duration, self.networks['lm']['n_nodes']), dtype=float)
             
-            for trial_id in range(n_trials_per_angle):
-                # test_it = iter(osi_dsi_data_set)
-                for angle_id, angle in enumerate(range(0, 360, 45)):
+            for angle_id, angle in enumerate(range(0, 360, 45)):
+                # load LGN firign rates for the given angle and calculate spiking probability
+                lgn_fr = lgn_firing_rates_dict[angle]
+                lgn_fr = tf.constant(lgn_fr, dtype=tf.float32)
+                _p = 1 - tf.exp(-lgn_fr / 1000.)
+
+                for trial_id in range(n_trials_per_angle):
                     t0 = time()
                     # Reset the memory stats
                     tf.config.experimental.reset_memory_stats('GPU:0')
-
-                    lgn_fr = lgn_firing_rates_dict[angle]
-                    lgn_fr = tf.constant(lgn_fr, dtype=tf.float32)
-                    _p = 1 - tf.exp(-lgn_fr / 1000.)
+                    # Generate LGN spikes
                     x = tf.random.uniform(tf.shape(_p)) < _p
-                    y = tf.constant(angle, dtype=tf.float32, shape=(1,))
+                    y = tf.constant(angle, dtype=tf.float32, shape=(1,1))
                     w = tf.constant(sim_duration, dtype=tf.float32, shape=(1,))
 
                     # x, y, _, w = next(test_it)
@@ -728,7 +791,8 @@ class Callbacks:
                     num_chunks = (2500//chunk_size + 1)
                     for i in range(num_chunks):
                         chunk = x[:, i * chunk_size : (i + 1) * chunk_size, :]
-                        v1_z_chunk, lm_z_chunk = self.distributed_roll_out(chunk, y, w, output_spikes=True)
+                        v1_z_chunk, lm_z_chunk, _ = self.distributed_roll_out(chunk, y, w, output_spikes=True)
+                        # v1_z_chunk, lm_z_chunk, _ = results
                         v1_spikes[angle_id, i * chunk_size : (i + 1) * chunk_size, :] += v1_z_chunk.numpy()[0, :, :].astype(float)
                         lm_spikes[angle_id, i * chunk_size : (i + 1) * chunk_size, :] += lm_z_chunk.numpy()[0, :, :].astype(float)
 
@@ -754,8 +818,9 @@ class Callbacks:
 
                     print(f'Trial {trial_id}/{n_trials_per_angle} - Angle {angle} done.')
                     print(f'    Trial running time: {time() - t0:.2f}s')
-                    mem_data = printgpu(verbose=1)
-                    print(f'    Memory consumption (current - peak): {mem_data[0]:.2f} GB - {mem_data[1]:.2f} GB\n')
+                    for gpu_id in range(len(self.strategy.extended.worker_devices)):
+                        mem_data = printgpu(gpu_id=gpu_id, verbose=1)
+                        print(f'    Memory consumption (current - peak) GPU {gpu_id}: {mem_data[0]:.2f} GB - {mem_data[1]:.2f} GB')
         
             # Average the spikes over the number of trials
             v1_spikes = v1_spikes/n_trials_per_angle
@@ -769,5 +834,5 @@ class Callbacks:
             for spikes, area in zip([v1_spikes, lm_spikes], ['v1', 'lm']):
                 metrics_analysis = ModelMetricsAnalysis(self.networks[area], data_dir=self.flags.data_dir,
                                                         drifting_gratings_init=500, drifting_gratings_end=2500,
-                                                        area=area, analyze_core_only=True, directory=boxplots_dir, filename=f'Epoch_{self.epoch}')
-                metrics_analysis(spikes, DG_angles)
+                                                        area=area, analyze_core_only=True)
+                metrics_analysis(spikes, DG_angles, metrics=["Rate at preferred direction (Hz)", "OSI", "DSI"], directory=boxplots_dir, filename=f'Epoch_{self.epoch}')
