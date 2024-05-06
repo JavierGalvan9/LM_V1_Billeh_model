@@ -368,5 +368,8 @@ def load_gabor_simulation_results_hdf5(full_data_path, n_trials=None, skip_first
                 data[area][row_col] = {}
                 for direction in dataset[area][row_col].keys():
                     data[area][row_col][direction] = np.array(dataset[area][row_col][direction][first_simulation:last_simulation, :,:]).astype(np.uint8)
+                data[area][row_col] = {}
+                for direction in dataset[area][row_col].keys():
+                    data[area][row_col][direction] = np.array(dataset[area][row_col][direction][first_simulation:last_simulation, :,:]).astype(np.uint8)
                 
     return data, flags_dict, n_trials

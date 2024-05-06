@@ -1,10 +1,9 @@
 import os
 import sys
 import absl
-import json
 import numpy as np
+from matplotlib import pyplot as plt
 import tensorflow as tf
-import matplotlib.pyplot as plt
 import pickle as pkl
 from packaging import version
 
@@ -13,8 +12,8 @@ if version.parse(tf.__version__) < version.parse("2.4.0"):
 else:
     from tensorflow.keras import mixed_precision
 
-from Model_utils import load_sparse, models, other_billeh_utils, stim_dataset, toolkit
-from Model_utils.plotting_utils import InputActivityFigure, RasterPlot, LaminarPlot, LGN_sample_plot
+from Model_utils import load_sparse, models, stim_dataset, toolkit
+from Model_utils.plotting_utils import InputActivityFigure
 from Model_utils.model_metrics_analysis import ModelMetricsAnalysis
 from time import time
 import ctypes.util
@@ -79,7 +78,7 @@ def main(_):
     if logdir == '':
         flag_str = f'v1_{v1_neurons}_lm_{lm_neurons}'
         for name, value in flags.flag_values_dict().items():
-            if value != flags[name].default and name in ['n_input', 'seq_len', 'interarea_weight_distribution', 'E4_weight_factor']:
+            if value != flags[name].default and name in ['n_input', 'core_only', 'connected_selection', 'interarea_weight_distribution', 'E4_weight_factor']:
                 flag_str += f'_{name}_{value}'
         # Define flag string as the second part of results_path
         results_dir = f'{flags.results_dir}/{flag_str}'
@@ -111,7 +110,17 @@ def main(_):
     # In this case, the reduce_to_device argument is set to "cpu:0", which means that the results are being reduced to the first CPU device.
     # strategy = tf.distribute.MirroredStrategy(cross_device_ops=tf.distribute.ReductionToOneDevice(reduce_to_device="cpu:0")) 
     device = "/gpu:0" if tf.config.list_physical_devices("GPU") else "/cpu:0"
+    print(tf.config.list_physical_devices())
+    print(tf.config.list_physical_devices("GPU"))
     strategy = tf.distribute.OneDeviceStrategy(device=device)
+
+    from tensorflow.python.client import device_lib
+
+    def get_available_devices():
+        local_device_protos = device_lib.list_local_devices()
+        return [x.name for x in local_device_protos]
+
+    print(get_available_devices())
 
     per_replica_batch_size = flags.batch_size
     global_batch_size = per_replica_batch_size * strategy.num_replicas_in_sync
@@ -152,7 +161,8 @@ def main(_):
             train_recurrent_v1=flags.train_recurrent_v1, 
             train_recurrent_lm=flags.train_recurrent_lm, 
             train_input=flags.train_input, 
-            train_interarea=flags.train_interarea,
+            train_interarea_lm_v1=flags.train_interarea_lm_v1,
+            train_interarea_v1_lm=flags.train_interarea_v1_lm,
             train_noise=flags.train_noise,
             batch_size=flags.batch_size, 
             pseudo_gauss=flags.pseudo_gauss, 
@@ -215,26 +225,8 @@ def main(_):
             _v1_z, _lm_z = strategy.run(roll_out, args=(x,))
             return _v1_z, _lm_z
         
-        # Define OSI/DSI dataset
-        # def get_osi_dsi_dataset_fn(regular=False):
-        #     def _f(input_context):
-        #         post_delay = flags.seq_len - (2500 % flags.seq_len)
-        #         _data_set = stim_dataset.generate_drifting_grating_tuning(
-        #             seq_len=2500+post_delay,
-        #             pre_delay=500,
-        #             post_delay = post_delay,
-        #             n_input=flags.n_input,
-        #             regular=regular
-        #         ).batch(1)
-                            
-        #         return _data_set
-        #     return _f
-        
-        # osi_dsi_data_set = strategy.distribute_datasets_from_function(get_osi_dsi_dataset_fn(regular=True))
-
         # LGN firing rates to the different angles
         DG_angles = np.arange(0, 360, 45)
-
         osi_dataset_path = os.path.join('OSI_DSI_dataset', 'lgn_firing_rates.pkl')
         if not os.path.exists(osi_dataset_path):
             print('Creating OSI/DSI dataset...')
@@ -248,7 +240,9 @@ def main(_):
                         post_delay = post_delay,
                         n_input=flags.n_input,
                         regular=regular,
-                        return_firing_rates=True
+                        return_firing_rates=True,
+                        rotation=flags.rotation,
+                        billeh_phase=True,
                     ).batch(1)
                                 
                     return _lgn_firing_rates
@@ -282,15 +276,18 @@ def main(_):
         sim_duration = (2500//flags.seq_len + 1) * flags.seq_len
         v1_spikes = np.zeros((8, sim_duration, networks['v1']['n_nodes']), dtype=float)
         lm_spikes = np.zeros((8, sim_duration, networks['lm']['n_nodes']), dtype=float)
-        for trial_id in range(flags.n_trials_per_angle):
-            for angle_id, angle in enumerate(range(0, 360, 45)):
+
+        for angle_id, angle in enumerate(range(0, 360, 45)):
+            # load LGN firign rates for the given angle and calculate spiking probability
+            lgn_fr = lgn_firing_rates_dict[angle]
+            lgn_fr = tf.constant(lgn_fr, dtype=tf.float32)
+            _p = 1 - tf.exp(-lgn_fr / 1000.)
+
+            for trial_id in range(flags.n_trials_per_angle):
                 t0 = time()
                 # Reset the memory stats
-                tf.config.experimental.reset_memory_stats('GPU:0')
-
-                lgn_fr = lgn_firing_rates_dict[angle]
-                lgn_fr = tf.constant(lgn_fr, dtype=tf.float32)
-                _p = 1 - tf.exp(-lgn_fr / 1000.)
+                # tf.config.experimental.reset_memory_stats('GPU:0')
+                # Generate LGN spikes
                 x = tf.random.uniform(tf.shape(_p)) < _p
 
                 chunk_size = flags.seq_len
@@ -324,8 +321,7 @@ def main(_):
                 print(f'Trial {trial_id+1}/{flags.n_trials_per_angle} - Angle {angle} done.')
                 print(f'    Trial running time: {time() - t0:.2f}s')
                 mem_data = printgpu(verbose=1)
-                print(f'    Memory consumption (current - peak): {mem_data[0]:.2f} GB - {mem_data[1]:.2f} GB\n')
-
+                # print(f'    Memory consumption (current - peak): {mem_data[0]:.2f} GB - {mem_data[1]:.2f} GB\n')
 
         # Average the spikes over the number of trials
         v1_spikes = v1_spikes/flags.n_trials_per_angle
@@ -333,14 +329,66 @@ def main(_):
         lm_spikes = lm_spikes/flags.n_trials_per_angle
         lm_spikes = lm_spikes[:, :2500, :]
 
+
+        
+        for spikes, area in zip([v1_spikes, lm_spikes], ['v1', 'lm']):
+            # Save the spikes
+            spikes_dir = os.path.join(logdir, 'Spikes_OSI_DSI')
+            os.makedirs(spikes_dir, exist_ok=True)
+            tuning_angles = networks[area]['tuning_angle']
+            
+            for angle_id, angle in enumerate(range(0, 360, 45)):
+                firingRates = calculate_Firing_Rate(spikes[angle_id, :, :], drifting_gratings_init=500, drifting_gratings_end=2500)
+                x = tuning_angles
+                y = firingRates
+                # Define bins for delta_angle
+                bins = np.linspace(np.min(x), np.max(x), 50)
+                # Compute average rates for each bin
+                average_rates = []
+                for i in range(len(bins)-1):
+                    mask = (x >= bins[i]) & (x < bins[i+1])
+                    average_rates.append(np.mean(y[mask]))
+                # Create bar plot
+                plt.figure(figsize=(10, 6))
+                plt.bar(bins[:-1], average_rates, width=np.diff(bins))
+                plt.xlabel('Tuning Angle')
+                plt.ylabel('Average Rates')
+                plt.title(f'Gratings Angle: {angle}')
+                plt.savefig(os.path.join(spikes_dir, f'{area}_spikes_angle_{angle}.png'))
+
         # Do the OSI/DSI analysis       
         boxplots_dir = os.path.join(logdir, 'Boxplots_OSI_DSI')
         os.makedirs(boxplots_dir, exist_ok=True)
-        for spikes, area in zip([v1_spikes, lm_spikes], ['v1', 'lm']):
+
+        fr_boxplots_dir = os.path.join(logdir, f'Boxplots_OSI_DSI/Ave_Rate(Hz)')
+        os.makedirs(fr_boxplots_dir, exist_ok=True)
+        fig, axs = plt.subplots(2, 1, figsize=(12, 14))
+
+        for axis_id, spikes, area in zip([0, 1], [v1_spikes, lm_spikes], ['v1', 'lm']):
+            
             metrics_analysis = ModelMetricsAnalysis(networks[area], data_dir=flags.data_dir,
                                                     drifting_gratings_init=500, drifting_gratings_end=2500,
-                                                    area=area, analyze_core_only=True, directory=boxplots_dir, filename=f'Epoch_{current_epoch}')
-            metrics_analysis(spikes, DG_angles)
+                                                    area=area, analyze_core_only=True)
+            # Figure for OSI/DSI boxplots
+            metrics_analysis(spikes, DG_angles, metrics=["Rate at preferred direction (Hz)", "OSI", "DSI"], 
+                            directory=boxplots_dir, filename=f'Epoch_{current_epoch}')
+            # Figure for Average firing rate boxplots
+            metrics_analysis(spikes, DG_angles, metrics=["Ave_Rate(Hz)"], axis=axs[axis_id],
+                            directory=fr_boxplots_dir, filename=f'{area}_epoch_{current_epoch}')   
+        fig.tight_layout()
+        fig.savefig(os.path.join(fr_boxplots_dir, f'epoch_{current_epoch}.png'), dpi=300, transparent=False)
+        plt.close()  
+
+def calculate_Firing_Rate(z, drifting_gratings_init=500, drifting_gratings_end=2500):
+    dg_spikes = z[drifting_gratings_init:drifting_gratings_end, :]
+    # if the number of dimensions of dg_spikes is 2, reshape it to 3 adding an additional first dimension
+    # if dg_spikes.ndim == 2:
+    #     dg_spikes = dg_spikes.reshape(1, dg_spikes.shape[0], dg_spikes.shape[1])
+    # mean_dg_spikes = np.mean(dg_spikes, axis=0)
+    mean_firing_rates = np.sum(dg_spikes, axis=0)/((drifting_gratings_end-drifting_gratings_init)/1000)
+    
+    return mean_firing_rates
+
 
 
 if __name__ == '__main__':
@@ -358,7 +406,7 @@ if __name__ == '__main__':
 
     absl.app.flags.DEFINE_float('learning_rate', .01, '')
     absl.app.flags.DEFINE_float('rate_cost', 100., '')
-    absl.app.flags.DEFINE_float('voltage_cost', .00001, '')
+    absl.app.flags.DEFINE_float('voltage_cost', 1., '')
     absl.app.flags.DEFINE_float('osi_cost', 1., '')
     absl.app.flags.DEFINE_string('osi_loss_method', 'crowd_spikes', '')
     absl.app.flags.DEFINE_float('osi_loss_subtraction_ratio', 1., '')
@@ -405,7 +453,8 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_boolean('train_recurrent_v1', False, '')
     absl.app.flags.DEFINE_boolean('train_recurrent_lm', False, '')
     absl.app.flags.DEFINE_boolean('train_input', False, '')
-    absl.app.flags.DEFINE_boolean('train_interarea', True, '')
+    absl.app.flags.DEFINE_boolean('train_interarea_lm_v1', False, '')
+    absl.app.flags.DEFINE_boolean('train_interarea_v1_lm', False, '')
     absl.app.flags.DEFINE_boolean('train_noise', False, '')
     # absl.app.flags.DEFINE_boolean('train_recurrent_per_type', False, '')
     absl.app.flags.DEFINE_boolean('connected_selection', True, '')
@@ -416,6 +465,8 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_boolean("bmtk_compat_lgn", True, "")
     absl.app.flags.DEFINE_boolean("average_grad_for_cell_type", False, "")
     absl.app.flags.DEFINE_boolean("reset_every_step", False, "")
+    absl.app.flags.DEFINE_boolean("spontaneous_training", False, "")
+    absl.app.flags.DEFINE_string("rotation", "ccw", "")
 
     absl.app.flags.DEFINE_string('ckpt_dir', '', '')
 

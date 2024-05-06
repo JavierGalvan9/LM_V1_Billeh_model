@@ -19,7 +19,7 @@ def intersomatic_distance(sources_projected_x, targets_x, sources_projected_z, t
 
 @njit
 def gaussian_decay(r, a, sigma):
-    return a*np.exp(-(r**2/(2*sigma**2)))
+    return a*np.exp(-(r**2/(sigma**2)))
 
 @njit
 def cart2pol(x, y):
@@ -59,7 +59,11 @@ class InterareaConnectivity:
         # Calculate the ratio between the size of the source and target columns
         target_network_radius = np.sqrt(self.target_network['x']**2 + self.target_network['z']**2).max()
         source_network_radius = np.sqrt(self.source_network['x']**2 + self.source_network['z']**2).max()
-        self.radius_ratio = target_network_radius/source_network_radius
+        # self.radius_ratio = target_network_radius/source_network_radius
+        if self.source_column_name == 'v1':
+            self.radius_ratio = 151.07/400
+        elif self.source_column_name == 'lm':
+            self.radius_ratio = 400/151.07
 
         # Create dictionary between node_type_id and their pop names
         self.node_type_id_to_pop_name_dict = node_type_id_to_pop_name()

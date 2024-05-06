@@ -137,11 +137,11 @@ def main():
     print(f'> Results for {flags.task_name} will be stored in:\n {logdir} \n')
 
     # Define the job submission commands for the training and evaluation scripts
-    training_commands = ["run", "-g", "1", "-m", "24", "-t", "5:00"]
+    training_commands = ["run", "-g", "2", "-m", "24", "-t", "5:00"]
     evaluation_commands = ["run", "-g", "1", "-m", "70", "-t", "1:00"]
 
     # Define the training and evaluation script calls
-    training_script = "python multi_training_single_gpu_split.py " 
+    training_script = "python multi_training_distributed.py " 
     evaluation_script = "python osi_dsi_estimator.py " 
 
     # Append each flag to the string
