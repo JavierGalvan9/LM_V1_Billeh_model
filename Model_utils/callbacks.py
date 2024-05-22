@@ -174,7 +174,7 @@ class Callbacks:
         print(f'Epoch {self.epoch:2d}/{self.total_epochs} @ {date_str}')
         tf.print(f'Epoch {self.epoch:2d}/{self.total_epochs} @ {date_str}')
 
-    def on_epoch_end(self, x, v1_spikes, lm_spikes, x_spont, v1_spikes_spont, lm_spikes_spont, y, metric_values, bkg_noise=None, verbose=True):
+    def on_epoch_end(self, x, v1_spikes, lm_spikes, y, metric_values, bkg_noise=None, verbose=True, x_spont=None, v1_spikes_spont=None, lm_spikes_spont=None):
         self.step = 0
         if self.initial_metric_values is None:
             self.initial_metric_values = metric_values
@@ -210,11 +210,17 @@ class Callbacks:
             # self.plot_lgn_activity(x)
             self.save_best_model()
             self.plot_raster(x, v1_spikes, lm_spikes, y)
-            self.composed_raster(x, v1_spikes, lm_spikes, x_spont, v1_spikes_spont, lm_spikes_spont, y)
+            if x_spont is not None:
+                self.composed_raster(x, v1_spikes, lm_spikes, x_spont, v1_spikes_spont, lm_spikes_spont, y)
+
             self.plot_mean_firing_rate_boxplot(v1_spikes, lm_spikes, y)
-            self.plot_mean_osi_boxplot(v1_spikes, lm_spikes, y)
-            
-            self.plot_tuning_analysis(v1_spikes, lm_spikes, y)
+            self.plot_spontaneous_boxplot(v1_spikes_spont, lm_spikes_spont, y)
+            # self.plot_mean_osi_boxplot(v1_spikes, lm_spikes, y)
+            directory = os.path.join(self.logdir, 'OneShotTuningAnalysis')
+            self.plot_tuning_analysis(v1_spikes, lm_spikes, y, directory=directory)
+            # same for spontaneous
+            spontaneous_directory = os.path.join(self.logdir, 'OneShotTuningAnalysis/Spontaneous')
+            self.plot_tuning_analysis(v1_spikes_spont, lm_spikes_spont, y, directory=spontaneous_directory)
             # self.plot_populations_activity(v1_spikes, lm_spikes)
 
             self.model_variables_dict['Best'] = {var.name: var.numpy().astype(np.float16) for var in self.model.trainable_variables}
@@ -225,9 +231,9 @@ class Callbacks:
         else:
             self.no_improve_epochs += 1
            
-        # Plot osi_dsi if only 1 run and the osi/dsi period is reached
-        if self.flags.n_runs == 1 and (self.epoch % self.flags.osi_dsi_eval_period == 0 or self.epoch==1):
-            self.plot_osi_dsi(parallel=False)
+        # # Plot osi_dsi if only 1 run and the osi/dsi period is reached
+        # if self.flags.n_runs == 1 and (self.epoch % self.flags.osi_dsi_eval_period == 0 or self.epoch==1):
+        #     self.plot_osi_dsi(parallel=False)
 
         with self.summary_writer.as_default():
             for k, v in zip(self.metrics_keys, metric_values):
@@ -516,18 +522,22 @@ class Callbacks:
         plt.savefig(os.path.join(boxplots_dir, f'epoch_{self.epoch}.png'), dpi=300, transparent=False)
         plt.close()
 
-        # boxplots_dir = os.path.join(self.logdir, f'Boxplots/Prestimulus')
-        # os.makedirs(boxplots_dir, exist_ok=True)
-        # fig, axs = plt.subplots(2, 1, figsize=(12, 14))
-        # for axis_id, spikes, area in zip([0, 1], [v1_spikes, lm_spikes], ['v1', 'lm']):
-        #     metrics_analysis = ModelMetricsAnalysis(self.networks[area], data_dir=self.flags.data_dir, n_trials=1,
-        #                                             analyze_core_only=True, drifting_gratings_init=0, drifting_gratings_end=self.pre_delay, 
-        #                                             area=area)
-        #     metrics_analysis(spikes, y, metrics=['Spontaneous rate (Hz)'], axis=axs[axis_id], directory=boxplots_dir, filename=f'{area}_epoch_{self.epoch}')     
+    def plot_spontaneous_boxplot(self, v1_spikes, lm_spikes, y):
+        v1_spikes = v1_spikes.numpy()
+        lm_spikes = lm_spikes.numpy()
+        y = y.numpy()
+        boxplots_dir = os.path.join(self.logdir, f'Boxplots/Spontaneous')
+        os.makedirs(boxplots_dir, exist_ok=True)
+        fig, axs = plt.subplots(2, 1, figsize=(12, 14))
+        for axis_id, spikes, area in zip([0, 1], [v1_spikes, lm_spikes], ['v1', 'lm']):
+            metrics_analysis = ModelMetricsAnalysis(self.networks[area], data_dir=self.flags.data_dir, n_trials=1,
+                                                    analyze_core_only=True, drifting_gratings_init=self.pre_delay, drifting_gratings_end=self.flags.seq_len-self.post_delay,
+                                                    area=area)
+            metrics_analysis(spikes, y, metrics=['Spontaneous rate (Hz)'], axis=axs[axis_id], directory=boxplots_dir, filename=f'{area}_epoch_{self.epoch}')     
 
-        # plt.tight_layout()
-        # plt.savefig(os.path.join(boxplots_dir, f'epoch_{self.epoch}.png'), dpi=300, transparent=False)
-        # plt.close()
+        plt.tight_layout()
+        plt.savefig(os.path.join(boxplots_dir, f'epoch_{self.epoch}.png'), dpi=300, transparent=False)
+        plt.close()
 
     def plot_mean_osi_boxplot(self, v1_spikes, lm_spikes, y):
         v1_spikes = v1_spikes.numpy()
@@ -546,16 +556,15 @@ class Callbacks:
         plt.savefig(os.path.join(boxplots_dir, f'epoch_{self.epoch}.png'), dpi=300, transparent=False)
         plt.close()
 
-    def plot_tuning_analysis(self, v1_spikes, lm_spikes, y):
+    def plot_tuning_analysis(self, v1_spikes, lm_spikes, y, directory=''):
         v1_spikes = v1_spikes.numpy()
         lm_spikes = lm_spikes.numpy()
         y = y.numpy()
-        images_dir = os.path.join(self.logdir, 'OneShotTuningAnalysis')
-        os.makedirs(images_dir, exist_ok=True)
+        os.makedirs(directory, exist_ok=True)
         fig, axs = plt.subplots(2, 1, figsize=(12, 14))
         for axis_id, spikes, area in zip([0, 1], [v1_spikes, lm_spikes], ['v1', 'lm']):
             tuning_analyzer = OneShotTuningAnalysis(self.networks[area], data_dir=self.flags.data_dir, area=area, 
-                                                    directory=images_dir, analyze_core_only=True,
+                                                    directory=directory, analyze_core_only=True,
                                                     drifting_gratings_init=self.pre_delay, drifting_gratings_end=self.flags.seq_len-self.post_delay,
                                                     )
             tuning_analyzer(spikes, y)
@@ -791,7 +800,8 @@ class Callbacks:
                     num_chunks = (2500//chunk_size + 1)
                     for i in range(num_chunks):
                         chunk = x[:, i * chunk_size : (i + 1) * chunk_size, :]
-                        v1_z_chunk, lm_z_chunk, _ = self.distributed_roll_out(chunk, y, w, output_spikes=True)
+                        _out, _, _, _, _ = self.distributed_roll_out(chunk, y, w, output_spikes=True)
+                        v1_z_chunk, lm_z_chunk = _out[0][0], _out[0][2]
                         # v1_z_chunk, lm_z_chunk, _ = results
                         v1_spikes[angle_id, i * chunk_size : (i + 1) * chunk_size, :] += v1_z_chunk.numpy()[0, :, :].astype(float)
                         lm_spikes[angle_id, i * chunk_size : (i + 1) * chunk_size, :] += lm_z_chunk.numpy()[0, :, :].astype(float)
