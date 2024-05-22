@@ -380,7 +380,7 @@ class InterareaConnectivity:
                         synaptic_weights, synaptic_delays, receptor_ids = self.assign_weight_and_delay(source, target,
                                                                                                         src_tf_ids, tgt_tf_ids,
                                                                                                         nsyns_ret)
-                        synaptic_weights = 0.1*synaptic_weights
+                        synaptic_weights = 0.5*synaptic_weights
                     elif self.interarea_weight_distribution == 'zero_weights':
                         synaptic_weights, synaptic_delays, receptor_ids = self.assign_weight_and_delay(source, target,
                                                                                                         src_tf_ids, tgt_tf_ids,

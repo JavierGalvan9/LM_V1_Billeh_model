@@ -1,8 +1,8 @@
 import os
 
 # Define the environment variables for optimal GPU performance
-# os.environ['TF_GPU_THREAD_MODE'] = 'gpu_private'
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1' # before import tensorflow
+os.environ['TF_GPU_THREAD_MODE'] = 'gpu_private'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' # before import tensorflow
 os.environ['TF_GPU_ALLOCATOR'] = 'cuda_malloc_async'
 # os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
 

@@ -1,7 +1,7 @@
 import os
 
 # Define the environment variables for optimal GPU performance
-# os.environ['TF_GPU_THREAD_MODE'] = 'gpu_private'
+os.environ['TF_GPU_THREAD_MODE'] = 'gpu_private'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1' # before import tensorflow
 os.environ['TF_GPU_ALLOCATOR'] = 'cuda_malloc_async'
 # os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
@@ -355,12 +355,10 @@ def main(_):
         osi_loss = v1_osi_loss[0] + lm_osi_loss[0]
         tf.print('V1 OSI losses: ')
         tf.print(v1_osi_loss[1])
-        tf.print('LM OSI losses: ')
-        tf.print(lm_osi_loss[1])
         tf.print('V1 DSI losses: ')
         tf.print(v1_osi_loss[2])
-        tf.print('LM DSI losses: ')
-        tf.print(lm_osi_loss[2])
+        tf.print('V1 penalizations: ')
+        tf.print(lm_osi_loss[3])
 
         # lm_to_v1_weights_l2_regularizer = lm_to_v1_weight_regularizer(rsnn_layer.cell.v1.interarea_weight_values['lm'])
         # v1_to_lm_weights_l2_regularizer = v1_to_lm_weight_regularizer(rsnn_layer.cell.lm.interarea_weight_values['v1'])
