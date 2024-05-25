@@ -304,14 +304,14 @@ class SaveGaborSimDataHDF5:
             self.lm_core_mask = np.full(self.lm_core_neurons, True)
 
         # Define the shape of the data matrix
-        self.v1_data_shape = (flags.n_trials, flags.seq_len, self.v1_core_neurons)
-        self.lm_data_shape = (flags.n_trials, flags.seq_len, self.lm_core_neurons)
-        self.LGN_data_shape = (flags.n_trials, flags.seq_len, flags.n_input)
+        self.v1_data_shape = (flags.n_trials, 4*flags.seq_len, self.v1_core_neurons)
+        self.lm_data_shape = (flags.n_trials, 4*flags.seq_len, self.lm_core_neurons)
+        self.LGN_data_shape = (flags.n_trials, 4*flags.seq_len, flags.n_input)
 
         self.data_shapes = {'v1': self.v1_data_shape, 'lm': self.lm_data_shape, 'LGN': self.LGN_data_shape}
 
-        row_ids = np.arange(0, n_rows)
-        col_ids = np.arange(0, n_cols)
+        row_ids = [6] #np.arange(0, n_rows)
+        col_ids = [5] #np.arange(0, n_cols)
         # directions = np.arange(0, 180, 45)
 
         with h5py.File(os.path.join(self.data_path, 'simulation_data.hdf5'), 'w') as f:
@@ -365,6 +365,9 @@ def load_gabor_simulation_results_hdf5(full_data_path, n_trials=None, skip_first
         for area in dataset.keys():
             data[area] = {}
             for row_col in dataset[area].keys():
+                data[area][row_col] = {}
+                for direction in dataset[area][row_col].keys():
+                    data[area][row_col][direction] = np.array(dataset[area][row_col][direction][first_simulation:last_simulation, :,:]).astype(np.uint8)
                 data[area][row_col] = {}
                 for direction in dataset[area][row_col].keys():
                     data[area][row_col][direction] = np.array(dataset[area][row_col][direction][first_simulation:last_simulation, :,:]).astype(np.uint8)

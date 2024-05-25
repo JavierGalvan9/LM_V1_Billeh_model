@@ -17,5 +17,4 @@ borrar.py
 Time_to_first_spike_analysis
 spikes_test.pkl
 OSI_DSI_dataset
-multi_training_single_gpu_continuing.py
-multi_training_distributed.py
+
