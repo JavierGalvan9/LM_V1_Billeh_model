@@ -115,7 +115,8 @@ def main(_):
             train_recurrent_v1=flags.train_recurrent_v1, 
             train_recurrent_lm=flags.train_recurrent_lm, 
             train_input=flags.train_input, 
-            train_interarea=flags.train_interarea,
+            train_interarea_lm_v1=flags.train_interarea_lm_v1,
+            train_interarea_v1_lm=flags.train_interarea_v1_lm,
             train_noise=flags.train_noise,
             batch_size=flags.batch_size, 
             pseudo_gauss=flags.pseudo_gauss, 
@@ -189,7 +190,6 @@ def main(_):
                         post_delay = delays[1],
                         n_input = flags.n_input,
                         regular = regular,
-                        orientation = flags.orientation, 
                         x0 = row,
                         y0 = col,
                         r = flags.radius_circle,
@@ -202,7 +202,7 @@ def main(_):
                     return _data_set
                 return _f
             
-            data_set = strategy.distribute_datasets_from_function(get_dataset_fn())
+            data_set = strategy.distribute_datasets_from_function(get_dataset_fn(regular=True))
 
             print("---------- Training started at ", dt.datetime.now().strftime('%d-%m-%Y %H:%M'), ' ----------\n')
             time_per_sim = 0
@@ -215,7 +215,7 @@ def main(_):
                 for i in range(4):
                     x, y, _, w = next(data_it) 
                     lgn_spikes[:, i*flags.seq_len:(i+1)*flags.seq_len, :] = x
-                    # print y para ver la orientacio
+                    print(f'Orientation of the gratings: {y} degrees')
 
                 lgn_spikes = tf.constant(lgn_spikes, dtype=tf.bool)
                 v1_spikes, lm_spikes = distributed_roll_out(lgn_spikes)
@@ -266,7 +266,7 @@ if __name__ == '__main__':
 
     # Define the directory to save the results
     _results_dir = 'receptive_field_analysis'
-    _checkpoint_dir = 'Benchmark_models/v1_100000_lm_14264'
+    _checkpoint_dir = 'Benchmark_models/v1_100000_lm_30000'
 
     # Define particular task flags
     absl.app.flags.DEFINE_string('results_dir', _results_dir, '')
@@ -327,7 +327,8 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_boolean('train_recurrent_v1', flags_dict.get('train_recurrent_v1', False), '')
     absl.app.flags.DEFINE_boolean('train_recurrent_lm', flags_dict.get('train_recurrent_lm', False), '')
     absl.app.flags.DEFINE_boolean('train_input', flags_dict.get('train_input', False), '')
-    absl.app.flags.DEFINE_boolean('train_interarea', flags_dict.get('train_interarea', False), '')
+    absl.app.flags.DEFINE_boolean('train_interarea_lm_v1', flags_dict.get('train_interarea_lm_v1', False), '')
+    absl.app.flags.DEFINE_boolean('train_interarea_v1_lm', flags_dict.get('train_interarea_v1_lm', False), '')
     absl.app.flags.DEFINE_boolean('train_noise', flags_dict.get('train_noise', False), '')
     absl.app.flags.DEFINE_boolean('connected_selection', flags_dict.get('connected_selection', True), '')
     absl.app.flags.DEFINE_boolean('neuron_output', flags_dict.get('neuron_output', True), '')
