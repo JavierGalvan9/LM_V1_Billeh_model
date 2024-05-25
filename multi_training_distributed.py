@@ -717,7 +717,8 @@ def main(_):
         metric_values = train_values + val_values
 
         # # if the model train loss is minimal, save the model.
-        stop = callbacks.on_epoch_end(x_values[0], v1_spikes_values[0], lm_spikes_values[0], x_values[1], v1_spikes_values[1], lm_spikes_values[1], y, metric_values, bkg_noise=bkg_noise, verbose=True)    
+        stop = callbacks.on_epoch_end(x_values[0], v1_spikes_values[0], lm_spikes_values[0], y, metric_values, bkg_noise=bkg_noise, verbose=True, 
+                                    x_spont=x_values[1], v1_spikes_spont=v1_spikes_values[1], lm_spikes_spont=lm_spikes_values[1])    
         
         if stop:
             break

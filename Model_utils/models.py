@@ -458,6 +458,7 @@ class BillehColumn(tf.keras.layers.Layer):
         train_noise=False,
         train_interarea=True, 
         hard_reset=False, 
+        connected_areas=True,
         **kwargs
         ):
 
@@ -482,6 +483,7 @@ class BillehColumn(tf.keras.layers.Layer):
         self._lr_scale = lr_scale
         self._spike_gradient = spike_gradient
         self._hard_reset = hard_reset
+        self._connected_areas = connected_areas
         self._n_neurons = network['n_nodes']
         self._gauss_std = tf.cast(gauss_std, self._compute_dtype)
         # determine the membrane time decay constant
@@ -971,14 +973,17 @@ class BillehColumn(tf.keras.layers.Layer):
         i_rec = tf.transpose(i_rec)
 
         # ### Calculate the interarea input current ###
-        interarea_z_bufs = interarea_z_bufs[0]
-        dampened_interarea_z_bufs = interarea_z_bufs * self._dampening_factor  # dampened version of z_buf # no entiendo muy bien la utilidad de esto
-        # Now we use tf.stop_gradient to prevent the term (z_buf - dampened_z_buf) to be trained
-        interarea_z_buf = (tf.stop_gradient(interarea_z_bufs - dampened_interarea_z_bufs) + dampened_interarea_z_bufs)  
-        i_interarea = tf.zeros((self._n_max_receptors * self._n_neurons, 1), dtype=self._compute_dtype)
-        for column_order in [self.source_column_order]:
-            i_interarea += self.calculate_i_inter(interarea_z_buf, column_order)
-        i_interarea = tf.transpose(i_interarea) # shape (batch, neurons*receptors)
+        if self._connected_areas:
+            interarea_z_bufs = interarea_z_bufs[0]
+            dampened_interarea_z_bufs = interarea_z_bufs * self._dampening_factor  # dampened version of z_buf # no entiendo muy bien la utilidad de esto
+            # Now we use tf.stop_gradient to prevent the term (z_buf - dampened_z_buf) to be trained
+            interarea_z_buf = (tf.stop_gradient(interarea_z_bufs - dampened_interarea_z_bufs) + dampened_interarea_z_bufs)  
+            i_interarea = tf.zeros((self._n_max_receptors * self._n_neurons, 1), dtype=self._compute_dtype)
+            for column_order in [self.source_column_order]:
+                i_interarea += self.calculate_i_inter(interarea_z_buf, column_order)
+            i_interarea = tf.transpose(i_interarea) # shape (batch, neurons*receptors)
+        else:
+            i_interarea = tf.zeros((batch_size, self._n_neurons * self._n_max_receptors), dtype=self._compute_dtype)
         
         # Add all the current sources
         rec_inputs = self.reshape_recurrent_currents(i_rec + i_interarea + bkg_noise, batch_size)
@@ -1077,6 +1082,7 @@ class MultiAreaModel(tf.keras.layers.Layer):
                  max_delay, 
                  pseudo_gauss, 
                  hard_reset, 
+                 connected_areas,
                  train_recurrent_v1, 
                  train_recurrent_lm, 
                  train_input, 
@@ -1094,14 +1100,16 @@ class MultiAreaModel(tf.keras.layers.Layer):
                                input_weight_scale=input_weight_scale, interarea_weight_scale=interarea_weight_scale,
                                lr_scale=lr_scale, max_delay=max_delay, batch_size=batch_size,
                                pseudo_gauss=pseudo_gauss, spike_gradient=spike_gradient, train_recurrent=train_recurrent_v1, 
-                               train_input=train_input, train_interarea=train_interarea_v1_lm, train_noise=train_noise, name='v1', hard_reset=hard_reset)
+                               train_input=train_input, train_interarea=train_interarea_v1_lm, train_noise=train_noise, 
+                               name='v1', hard_reset=hard_reset, connected_areas=connected_areas)
 
         self.lm = BillehColumn(networks['lm'], None, bkg_inputs['lm'],
                                gauss_std=gauss_std, dampening_factor=dampening_factor,
                                input_weight_scale=input_weight_scale, interarea_weight_scale=interarea_weight_scale,
                                lr_scale=lr_scale, max_delay=max_delay, batch_size=batch_size,
                                pseudo_gauss=pseudo_gauss, spike_gradient=spike_gradient, train_recurrent=train_recurrent_lm, 
-                               train_input=train_input, train_interarea=train_interarea_lm_v1, train_noise=train_noise, name='lm', hard_reset=hard_reset)
+                               train_input=train_input, train_interarea=train_interarea_lm_v1, train_noise=train_noise, 
+                               name='lm', hard_reset=hard_reset, connected_areas=connected_areas)
 
         self._n_neurons = self.v1._n_neurons + self.lm._n_neurons
 
@@ -1181,10 +1189,10 @@ def create_model(networks,
                 batch_size=None,
                 pseudo_gauss=False,
                 hard_reset=False,
+                connected_areas=True,
                 output_completed_valid_from_time=120, 
                 output_abstract_valid_from_time=100,
                 ):
-
 
     # Create the input of the model
     # x = tf.keras.layers.Input(shape=(seq_len, n_input,)) # this shape (None, seq_len, n_input) dose not contain batch size, batch_size can be assigned as another argument
@@ -1218,6 +1226,7 @@ def create_model(networks,
                             max_delay=max_delay,
                             pseudo_gauss=pseudo_gauss, 
                             hard_reset=hard_reset,
+                            connected_areas=connected_areas,
                             train_recurrent_v1=train_recurrent_v1, 
                             train_recurrent_lm=train_recurrent_lm, 
                             train_input=train_input, 

@@ -137,8 +137,11 @@ def main():
     print(f'> Results for {flags.task_name} will be stored in:\n {logdir} \n')
 
     # Define the job submission commands for the training and evaluation scripts
-    training_commands = ["run", "-g", "1", "-m", "24", "-t", "5:00"]
-    evaluation_commands = ["run", "-g", "1", "-m", "70", "-t", "1:00"]
+    # training_commands = ["run", "-g", "1", "-m", "24", "-t", "5:00"]
+    # evaluation_commands = ["run", "-g", "1", "-m", "70", "-t", "1:00"]
+
+    training_commands = ["run", "-g", "1", "-m", "24", "-t", "0:30"]
+    evaluation_commands = ["run", "-g", "1", "-m", "24", "-t", "0:30"]
 
     # Define the training and evaluation script calls
     training_script = "python multi_training_single_gpu_split.py " 
@@ -162,12 +165,12 @@ def main():
     job_ids = []
     eval_job_ids = []
 
-    # # Initial OSI/DSI test
-    # initial_evaluation_command = evaluation_commands + ["-o", f"Out/{sim_name}_{v1_neurons}_initial_test.out", "-e", f"Error/{sim_name}_{v1_neurons}_initial_test.err", "-j", f"{sim_name}_initial_test"]
-    # initial_evaluation_script = evaluation_script + f"--seed {flags.seed} --ckpt_dir {logdir}  --run_session {-1}"
-    # initial_evaluation_command = initial_evaluation_command + [initial_evaluation_script]
-    # eval_job_id = submit_job(initial_evaluation_command)
-    # eval_job_ids.append(eval_job_id)
+    # Initial OSI/DSI test
+    initial_evaluation_command = evaluation_commands + ["-o", f"Out/{sim_name}_{v1_neurons}_initial_test.out", "-e", f"Error/{sim_name}_{v1_neurons}_initial_test.err", "-j", f"{sim_name}_initial_test"]
+    initial_evaluation_script = evaluation_script + f"--seed {flags.seed} --ckpt_dir {logdir}  --run_session {-1}"
+    initial_evaluation_command = initial_evaluation_command + [initial_evaluation_script]
+    eval_job_id = submit_job(initial_evaluation_command)
+    eval_job_ids.append(eval_job_id)
 
     for i in range(flags.n_runs):
         # Submit the training and evaluation jobs with dependencies: train0 - train1 & eval0 - rtrain2 & eval1 - ...
