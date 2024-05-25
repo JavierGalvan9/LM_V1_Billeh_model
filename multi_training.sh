@@ -5,6 +5,9 @@
 
 # python parallel_training_testing.py --spontaneous_training --v1_neurons 100000 --lm_neurons 30000 --realistic_neurons_ratio --osi_cost 0.1 --train_interarea_lm_v1 --train_noise --learning_rate 0.001 --n_runs 2 --n_epochs 100 --steps_per_epoch 20
 # python parallel_training_testing.py --delays '500,0' --seq_len 1000 --v1_neurons 100000 --lm_neurons 30000 --realistic_neurons_ratio --osi_cost 1 --train_noise --train_interarea_lm_v1 --train_interarea_v1_lm --train_recurrent_v1 --train_recurrent_lm --learning_rate 0.001 --n_runs 1 --n_epochs 10 --steps_per_epoch 50
-python parallel_training_testing.py --delays '0,0' --seq_len 500 --v1_neurons 100000 --lm_neurons 30000 --realistic_neurons_ratio --osi_cost 1 --train_noise --train_interarea_lm_v1 --train_interarea_v1_lm --train_recurrent_v1 --train_recurrent_lm --learning_rate 0.001 --n_runs 20 --n_epochs 1 --steps_per_epoch 500
+
+python parallel_training_testing.py --interarea_weight_distribution 'billeh_weights' --delays '0,0' --seq_len 500 --v1_neurons 100000 --lm_neurons 30000 --realistic_neurons_ratio --osi_cost 1 --train_noise --train_interarea_lm_v1 --train_interarea_v1_lm --train_recurrent_v1 --train_recurrent_lm --learning_rate 0.001 --n_runs 5 --n_epochs 20 --steps_per_epoch 20
+# python parallel_training_testing.py --interarea_weight_distribution 'billeh_weights' --delays '0,0' --seq_len 500 --v1_neurons 10000 --lm_neurons 3000 --realistic_neurons_ratio --osi_cost 1 --train_noise --train_interarea_lm_v1 --train_interarea_v1_lm --train_recurrent_v1 --train_recurrent_lm --learning_rate 0.001 --n_runs 2 --n_epochs 2 --steps_per_epoch 20
+
 
 # scp -r Benchmark_models sofiagil@nuredduna2020:/home/sofiagil/tfm/LM_V1_Billeh_model_sofia
