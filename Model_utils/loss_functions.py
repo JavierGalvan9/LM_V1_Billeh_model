@@ -29,15 +29,19 @@ class L2Regularizer(tf.keras.regularizers.Regularizer):
 
         
 def sample_firing_rates(firing_rates, n_neurons, rnd_seed):
+    # Sort the original firing rates
     sorted_firing_rates = np.sort(firing_rates)
-    percentiles = (np.arange(firing_rates.shape[-1])).astype(np.float32) / (firing_rates.shape[-1] - 1)
+    # Calculate the empirical cumulative distribution function (CDF)
+    # percentiles = (np.arange(firing_rates.shape[-1])).astype(np.float32) / (firing_rates.shape[-1] - 1)
+    percentiles = np.linspace(0, 1, sorted_firing_rates.size)
+    # Generate random uniform values from 0 to 1
     rate_rd = np.random.RandomState(seed=rnd_seed)
-    x_rand = rate_rd.uniform(size=n_neurons)
+    x_rand = rate_rd.uniform(low=0, high=1, size=n_neurons)
+    # Use inverse transform sampling: interpolate the uniform values to find the firing rates
     target_firing_rates = np.sort(np.interp(x_rand, percentiles, sorted_firing_rates))
-    
+    # target_firing_rates = np.interp(x_rand, percentiles, sorted_firing_rates)
     return target_firing_rates
-
-
+    
 def huber_quantile_loss(u, tau, kappa, dtype=tf.float32):
     tau = tf.cast(tau, dtype)
     num = tf.abs(tau - tf.cast(u <= 0, dtype))
@@ -70,8 +74,11 @@ def compute_spike_rate_target_loss(_spikes, target_rates, dtype=tf.float32):
             #     _rate_type = tf.gather(rates, value["neuron_ids"])
             #     target_rate = value["sorted_target_rates"]
 
+
             loss_type = compute_spike_rate_distribution_loss(_rate_type, target_rate, dtype=dtype)
+            # loss_type = tf.square(_rate_type-0.002)
             mean_loss_type = tf.reduce_mean(loss_type)
+
         else:
             mean_loss_type = tf.constant(0, dtype=dtype)
 
@@ -83,15 +90,16 @@ def compute_spike_rate_target_loss(_spikes, target_rates, dtype=tf.float32):
 
 
 def compute_spike_rate_distribution_loss(_rates, target_rate, dtype=tf.float32):
-    # ind = tf.range(target_rate.shape[0])
-    # rand_ind = tf.random.shuffle(ind)
-    # _rate = tf.gather(_rates, rand_ind)
+    # Firstly we shuffle the current model rates to avoid bias towardsa particular tuning angles (inherited from neurons ordering in the network)
+    ind = tf.range(target_rate.shape[0])
+    rand_ind = tf.random.shuffle(ind)
+    _rates = tf.gather(_rates, rand_ind)
     sorted_rate = tf.sort(_rates)
     # u = target_rate - sorted_rate
     u = sorted_rate - target_rate
     tau = (tf.range(target_rate.shape[0]) + 1) / target_rate.shape[0]
     loss = huber_quantile_loss(u, tau, 0.002, dtype=dtype)
-    # loss = huber_quantile_loss(u, tau, 0.1, dtype=dtype)
+    # loss = huber_quantile_loss(u, tau, 0.1, dtype=dtype) # this kappa value is usually too large and makes the training unstable
 
     return loss
 
@@ -197,7 +205,8 @@ class SpikeRateDistributionTarget:
 
         # Process rates
         type_rates_dict = {
-                            reversed_query_mapping[cell_type]: np.sort(np.append(subdf[self.neuropixels_feature].dropna().values / 1000, 0))
+                            reversed_query_mapping[cell_type]: np.append(subdf[self.neuropixels_feature].dropna().values / 1000, 0)
+                            # reversed_query_mapping[cell_type]: np.sort(np.append(subdf[self.neuropixels_feature].dropna().values / 1000, 0)) # the rates are sorted again later so is redundant
                             for cell_type, subdf in np_df.groupby("cell_type")
                         }
 
@@ -493,7 +502,8 @@ class OrientationSelectivityLoss:
         # Instead of complex numbers, use cosine and sine separately
         osi_cos_component = tf.math.cos(2.0 * radians_delta_angle)
         dsi_cos_component = tf.math.cos(radians_delta_angle)
-        # sin_component = tf.math.sin(2.0 * radians_delta_angle)
+        osi_sin_component = tf.math.sin(2.0 * radians_delta_angle)
+        dsi_sin_component = tf.math.sin(radians_delta_angle)
 
         if self._core_mask is not None:
             spikes = tf.boolean_mask(spikes, self._core_mask, axis=2)
@@ -513,19 +523,23 @@ class OrientationSelectivityLoss:
         # For weighted responses, we separately consider the contributions from cosine and sine
         weighted_osi_cos_responses = rates * osi_cos_component
         weighted_dsi_cos_responses = rates * dsi_cos_component
-
-        # weighted_sin_responses = rates * sin_component
+        weighted_osi_sin_responses = rates * osi_sin_component
+        weighted_dsi_sin_responses = rates * dsi_sin_component
 
         total_osi_loss = tf.constant(0.0, dtype=self._dtype)
         total_dsi_loss = tf.constant(0.0, dtype=self._dtype)
+        penalization_terms = tf.constant(0.0, dtype=self._dtype)
         individual_osi_loss = {}
         individual_dsi_loss = {}
+        individual_penalization_loss = {}
+
         for i, (key, value) in enumerate(self._target_osi_dsi.items()):
             if tf.size(value["ids"]) != 0:
                 _rates_type = tf.gather(rates, value['ids'])
                 _weighted_osi_cos_responses_type = tf.gather(weighted_osi_cos_responses, value['ids'])
                 _weighted_dsi_cos_responses_type = tf.gather(weighted_dsi_cos_responses, value['ids'])
-                # _weighted_sin_responses_type = tf.gather(weighted_sin_responses, value['ids'])
+                _weighted_osi_sin_responses_type = tf.gather(weighted_osi_sin_responses, value['ids'])
+                _weighted_dsi_sin_responses_type = tf.gather(weighted_dsi_sin_responses, value['ids'])
 
                 # Define small epsilon values to avoid differentiability issues when 0 spikes are recorded within the population
                 epsilon1 = 0.0005
@@ -544,21 +558,27 @@ class OrientationSelectivityLoss:
                 osi_approx_type = approximated_osi_numerator / approximated_denominator
                 dsi_approx_type = approximated_dsi_numerator / approximated_denominator
 
+                osi_penalization = tf.math.square(tf.reduce_mean(_weighted_osi_sin_responses_type) / approximated_denominator)
+                dsi_penalization = tf.math.square(tf.reduce_mean(_weighted_dsi_sin_responses_type) / approximated_denominator)
+
                 # Calculate the OSI loss
                 osi_loss_type = tf.math.square(osi_approx_type - value['OSI'])
                 dsi_loss_type = tf.math.square(dsi_approx_type - value['DSI'])
 
                 individual_osi_loss[key] = osi_loss_type
                 individual_dsi_loss[key] = dsi_loss_type
+                individual_penalization_loss[key] = osi_penalization + dsi_penalization
 
                 total_osi_loss += osi_loss_type
                 total_dsi_loss += dsi_loss_type
+                penalization_terms += osi_penalization + dsi_penalization
             else:
                 individual_osi_loss[key] = 0.0
                 individual_dsi_loss[key] = 0.0
+                individual_penalization_loss[key] = 0.0
                 pass
             
-        return (total_osi_loss + total_dsi_loss) * self._osi_cost, individual_osi_loss, individual_dsi_loss
+        return (total_osi_loss + total_dsi_loss + penalization_terms) * self._osi_cost, individual_osi_loss, individual_dsi_loss, individual_penalization_loss
 
 
     def __call__(self, spikes, angle, trim, normalizer=None):

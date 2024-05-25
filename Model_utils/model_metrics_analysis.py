@@ -19,6 +19,8 @@ from matplotlib.patches import Rectangle
 sys.path.append(os.path.join(os.getcwd(), "Model_utils"))
 import other_billeh_utils
 import load_sparse
+from scipy.stats import ks_2samp
+
 
 mpl.style.use('default')
 # rd = np.random.RandomState(seed=42)
@@ -47,7 +49,7 @@ def calculate_OSI_DSI(rates_df, network, DG_angles=range(0,360, 45), n_selected_
     node_ids = np.arange(n_neurons)
 
     # save all rates with pickle
-    rates_df.to_pickle('rates_df.pkl')
+    # rates_df.to_pickle('rates_df.pkl')
     
     # Get the firing rates for every neuron and DG angle
     all_rates = np.array([g["Ave_Rate(Hz)"] for _, g in rates_df.groupby("DG_angle")]).T
@@ -83,6 +85,41 @@ def calculate_OSI_DSI(rates_df, network, DG_angles=range(0,360, 45), n_selected_
         osi_df = osi_df[osi_df["Ave_Rate(Hz)"] != 0]
 
     return osi_df
+
+
+def compute_ks_statistics(df, metric='Ave_Rate(Hz)', min_n_sample=15):
+    """
+    Compute the Kolmogorov-Smirnov statistic and similarity scores for each cell type in the dataframe.
+    Parameters:
+    - df: pd.DataFrame, contains data with columns 'data_type' and 'Ave_Rate(Hz)', and indexed by cell type.
+    Returns:
+    - mean_similarity_score: float, the mean of the similarity scores computed across all cell types.
+    """
+    # Get unique cell types
+    # cell_types = df.index.unique()
+    cell_types = df['cell_type'].unique()
+    # Initialize a dictionary to store the results
+    ks_results = {}
+    similarity_scores = {}
+    # Iterate over cell types
+    for cell_type in cell_types:
+        # Filter data for current cell type from two different data types
+        # df1 = df.loc[(df.index == cell_type) & (df['data_type'] == 'V1/LM GLIF model'), metric]
+        # df2 = df.loc[(df.index == cell_type) & (df['data_type'] == 'Neuropixels'), metric]
+        df1 = df.loc[(df['cell_type'] == cell_type) & (df['data_type'] == 'V1/LM GLIF model'), metric]
+        df2 = df.loc[(df['cell_type'] == cell_type) & (df['data_type'] == 'Neuropixels'), metric]
+        # Drop NA values
+        df1.dropna(inplace=True)
+        df2.dropna(inplace=True)
+        # Calculate the Kolmogorov-Smirnov statistic
+        if len(df1) >= min_n_sample and len(df2) >= min_n_sample:
+            ks_stat, p_value = ks_2samp(df1, df2)
+            ks_results[cell_type] = (ks_stat, p_value)
+            similarity_scores[cell_type] = 1 - ks_stat
+
+    # Calculate the mean of the similarity scores and return it
+    mean_similarity_score = np.mean(list(similarity_scores.values()))
+    return mean_similarity_score
 
 
 class ModelMetricsAnalysis:    
@@ -150,6 +187,7 @@ class ModelMetricsAnalysis:
         # osi_approx_df = self.calculate_osi_approximation(firing_rates_df)
         # osi_approx_normalized_df = self.calculate_osi_approximation(firing_rates_df, normalized=True)
         osi_approx_real_df = self.calculate_osi_approximation(firing_rates_df, normalized=True, real_part_only=True)
+        # print(osi_approx_real_df)
 
         # create a copy
         # osi_approx_nomalized_df2 = osi_approx_nomalized_df.copy()
@@ -170,9 +208,8 @@ class ModelMetricsAnalysis:
         # metrics_df.to_csv(os.path.join(self.directory, f"V1_OSI_DSI_DF.csv"), sep=" ", index=False)        
 
         boxplot = MetricsBoxplot(area=self.area, save_dir=directory, filename=filename)
-        # if metrics == 
-        boxplot.plot(metrics=metrics, metrics_df=metrics_df, additional_dfs=[osi_approx_real_df], additional_dfs_labels=['Approximation'], axis=axis)
-        # boxplot.plot(metrics=metrics, metrics_df=metrics_df, axis=axis)
+        # boxplot.plot(metrics=metrics, metrics_df=metrics_df, additional_dfs=[osi_approx_real_df], additional_dfs_labels=['Approximation'], axis=axis)
+        boxplot.plot(metrics=metrics, metrics_df=metrics_df, axis=axis)
 
     def create_firing_rates_df(self, n_neurons, spikes, n_trials=10, drifting_gratings_init=50, 
                                drifting_gratings_end=550, DG_angles=np.arange(0, 360, 45)):
@@ -260,6 +297,9 @@ class ModelMetricsAnalysis:
 
                     osi_approx_type = approximated_osi_numerator / approximated_denominator
                     dsi_approx_type = approximated_dsi_numerator / approximated_denominator
+
+                    tf.print('OSI', pop_name, osi_approx_type.numpy(), (tf.reduce_mean(_weighted_osi_sin_responses_type)/approximated_denominator).numpy())
+                    tf.print('DSI', pop_name, dsi_approx_type.numpy(), (tf.reduce_mean(_weighted_dsi_sin_responses_type)/approximated_denominator).numpy())
 
                     pop_names_osis[pop_name].append(osi_approx_type.numpy())
                     pop_names_dsis[pop_name].append(dsi_approx_type.numpy())
@@ -448,7 +488,7 @@ class MetricsBoxplot:
                 self.osi_dfs.append(self.get_osi_dsi_df(metric_file=df, data_source_name=additional_dfs_labels[i], data_dir='Additional_data'))
         
         df = pd.concat(self.osi_dfs, ignore_index=True)
-        # df.to_csv(os.path.join('Borrar', f"help_DG_firing_rates_df.csv"), sep=" ", index=False)
+        # df.to_csv(f"help_DG_firing_rates_df.csv", sep=" ", index=False)
 
         # Create a figure to compare several model metrics against Neuropixels data
         n_metrics = len(metrics)
@@ -485,7 +525,8 @@ class MetricsBoxplot:
             else:
                 ylims = [0, 1]
 
-            plot_one_metric(axs[idx], df, metric, ylims, color_pal, hue_order=cell_type_order)
+            average_similarity_score = compute_ks_statistics(df, metric=metric)
+            plot_one_metric(axs[idx], df, metric, ylims, color_pal, hue_order=cell_type_order, similarity_score=average_similarity_score)
 
         axs[0].legend(loc="upper right", fontsize=16)
         axs[0].set_title(f"{self.area}", fontsize=20)
@@ -505,7 +546,7 @@ class MetricsBoxplot:
             plt.close()
 
 
-def plot_one_metric(ax, df, metric_name, ylim, cpal=None, hue_order=None):
+def plot_one_metric(ax, df, metric_name, ylim, cpal=None, hue_order=None, similarity_score=None):
 
     sns.boxplot(
         x="cell_type",
@@ -551,6 +592,10 @@ def plot_one_metric(ax, df, metric_name, ylim, cpal=None, hue_order=None):
 
     # Hide the legend
     ax.get_legend().remove()
+    # Add the average similarity score to the legend
+    if similarity_score is not None:
+        ax.text(0.05, 0.9, f'S: {similarity_score:.2f}', transform=ax.transAxes, fontsize=14,
+                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.5))
 
     return ax
 
