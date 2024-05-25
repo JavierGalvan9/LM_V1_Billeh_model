@@ -1,7 +1,7 @@
 import os
 
 # Define the environment variables for optimal GPU performance
-# os.environ['TF_GPU_THREAD_MODE'] = 'gpu_private'
+os.environ['TF_GPU_THREAD_MODE'] = 'gpu_private'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' # before import tensorflow
 os.environ['TF_GPU_ALLOCATOR'] = 'cuda_malloc_async'
 # os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
@@ -163,6 +163,7 @@ def main(_):
             use_state_input=True, 
             return_state=True,
             hard_reset=flags.hard_reset,
+            connected_areas=True,
             add_rate_metric=True, 
             max_delay=5, 
             # output_completed_valid_from_time=120, 
@@ -233,7 +234,13 @@ def main(_):
         lm_rate_loss = tf.identity(lm_rate_distribution_regularizer(rsnn_layer.output[0][2]))
         lm_rate_loss2 = tf.identity(lm_rate_distribution_regularizer2(rsnn_layer.output[0][2]))
         # Final combination of all terms, using tf.add_n for better readability and efficiency
-        rate_loss = tf.add_n([v1_rate_loss, v1_rate_loss2, lm_rate_loss, lm_rate_loss2])
+        # Now combine all four terms sequentially
+        with tf.control_dependencies([v1_rate_loss, v1_rate_loss2, lm_rate_loss, lm_rate_loss2]):
+            # Ensure lm_rate_loss2 is computed after the first three losses
+            lm_rate_loss2 = tf.identity(lm_rate_loss2)
+
+        # Final combination of all terms, using tf.add_n for better readability and efficiency
+        rate_loss = tf.add_n([v1_rate_loss, v1_rate_loss2, lm_rate_loss])
 
         # Create an ExponentialMovingAverage object
         # Define the decay factor for the exponential moving average
@@ -333,16 +340,23 @@ def main(_):
             val_loss.reset_states(), val_accuracy.reset_states(), val_firing_rate.reset_states()
             val_rate_loss.reset_states(), val_voltage_loss.reset_states(), val_osi_loss.reset_states()
 
+
     def roll_out(_x, _y, _w, spontaneous=False, trim=True):
         _initial_state = tf.nest.map_structure(lambda _a: _a.read_value(), state_variables)
+        # Access initial state values directly
+        # _initial_state = [var.read_value() for var in state_variables]
+
         seq_len = tf.shape(_x)[1]
         dummy_zeros = tf.zeros((flags.batch_size, seq_len, n_total_neurons), dtype)
-        # dummy_zeros = tf.zeros((flags.batch_size, flags.seq_len, n_total_neurons), dtype)
         _out, _p, _, _bkg_noise = extractor_model((_x, dummy_zeros, _initial_state))
         _v1_z, _v1_v, _lm_z, _lm_v = _out[0]
         # update state_variables with the new model state
         new_state = tuple(_out[1:])
+
         tf.nest.map_structure(lambda a, b: a.assign(b), state_variables, new_state)
+        # for var, new_val in zip(state_variables, new_state):
+        #     var.assign(new_val)
+
         # update the exponential moving average of the firing rates
         v1_rates = tf.reduce_mean(_v1_z, (0, 1))
         lm_rates = tf.reduce_mean(_lm_z, (0, 1))
@@ -369,15 +383,14 @@ def main(_):
             osi_loss = v1_osi_loss[0] + lm_osi_loss[0]
             tf.print('V1 OSI losses: ')
             tf.print(v1_osi_loss[1])
-            tf.print('LM OSI losses: ')
-            tf.print(lm_osi_loss[1])
             tf.print('V1 DSI losses: ')
             tf.print(v1_osi_loss[2])
-            tf.print('LM DSI losses: ')
-            tf.print(lm_osi_loss[2])
-            tf.print('OSI LOSS: ', v1_osi_loss[0], lm_osi_loss[0], osi_loss)
+            tf.print('V1 penalizations: ')
+            tf.print(lm_osi_loss[3])
 
-        rate_loss = v1_rate_loss + lm_rate_loss
+        # Ensuring the correct graph dependencies and sequential operations
+        with tf.control_dependencies([v1_rate_loss, lm_rate_loss]):
+            rate_loss = v1_rate_loss + lm_rate_loss
 
         # lm_to_v1_weights_l2_regularizer = lm_to_v1_weight_regularizer(rsnn_layer.cell.v1.interarea_weight_values['lm'])
         # v1_to_lm_weights_l2_regularizer = v1_to_lm_weight_regularizer(rsnn_layer.cell.lm.interarea_weight_values['v1'])
@@ -392,15 +405,14 @@ def main(_):
 
         return _out, _p, _loss, _aux, _bkg_noise
     
-
     @tf.function
-    def distributed_roll_out(x, y, w, output_spikes=True, spontaneous=False, trim=True):
+    def distributed_roll_out(x, y, w, spontaneous=False, trim=True):
         _out, _p, _loss, _aux, _bkg_noise = strategy.run(roll_out, args=(x, y, w, trim, spontaneous))
-        if output_spikes:
-            _v1_z, _lm_z = _out[0][0], _out[0][2]
-            return _v1_z, _lm_z, _bkg_noise
-        else:
-            return _out, _p, _loss, _aux     
+        # if output_spikes:
+        #     _v1_z, _lm_z = _out[0][0], _out[0][2]
+        #     return _v1_z, _lm_z, _bkg_noise
+        # else:
+        return _out, _p, _loss, _aux, _bkg_noise
 
     def train_step(_x, _y, _w, spontaneous, trim=True):
         ### Forward propagation of the model
@@ -420,7 +432,7 @@ def main(_):
         _loss, _aux, _out, _p = train_step(x, y, weights, spontaneous, trim)
         return _loss, _aux, _out, _p
 
-    def split_train_step(_x, _y, _w, _x_spontaneous, trim=True, output_metrics=False):
+    def split_train_step(_x, _y, _w, _x_spontaneous, trim=True):
         # Run the training step for the spontaneous condition
         _loss_spontaneous, _aux_spontaneous, _out_spontaneous, _ = distributed_train_step(_x_spontaneous, _y, _w, True, trim)
         # Run the training step for the non-spontaneous condition
@@ -448,19 +460,19 @@ def main(_):
         tf.print("Train Loss:", train_loss.result(), _loss, ' - ', _y, tf.reduce_sum(tf.cast(_x, tf.float32)))  
         tf.print(model.trainable_variables)
 
-        if output_metrics:
-            return [0., _loss, _rate, _aux_gratings['rate_loss'] + _aux_spontaneous['rate_loss'], _aux_gratings['voltage_loss'] + _aux_spontaneous['voltage_loss'], _aux_gratings['osi_loss']]
+        v1_spikes = _out_gratings[0][0]
+        lm_spikes = _out_gratings[0][2]
+        v1_spikes_spont = _out_spontaneous[0][0]
+        lm_spikes_spont = _out_spontaneous[0][2]
+
+        model_spikes = (v1_spikes, lm_spikes, v1_spikes_spont, lm_spikes_spont)	
+
+        return model_spikes, [0., _loss, _rate, _aux_gratings['rate_loss'] + _aux_spontaneous['rate_loss'], _aux_gratings['voltage_loss'] + _aux_spontaneous['voltage_loss'], _aux_gratings['osi_loss']]
 
     @tf.function
-    def distributed_split_train_step(x, y, weights, x_spontaneous, trim, output_metrics=False):
-        if output_metrics:
-            # _out = split_train_step(x, y, weights, x_spontaneous, trim, output_metrics)
-            _out = strategy.run(split_train_step, args=(x, y, weights, x_spontaneous, trim, output_metrics))
-            return _out
-        else:
-            # split_train_step(x, y, weights, x_spontaneous, trim)
-            strategy.run(split_train_step, args=(x, y, weights, x_spontaneous, trim))
-    
+    def distributed_split_train_step(x, y, weights, x_spontaneous, trim):
+        _out = strategy.run(split_train_step, args=(x, y, weights, x_spontaneous, trim))
+        return _out
     
     # @tf.function
     # def distributed_train_step(dist_inputs):
@@ -541,7 +553,7 @@ def main(_):
     # load LGN spontaneous firing rates 
     spontaneous_prob = 1 - tf.exp(-spontaneous_lgn_firing_rates / 1000.)
 
-    @tf.function
+    @tf.function(jit_compile=True)
     def generate_spontaneous_spikes(spontaneous_prob):
         x_spontaneous = tf.random.uniform(tf.shape(spontaneous_prob)) < spontaneous_prob
         return x_spontaneous
@@ -573,7 +585,7 @@ def main(_):
                 # Generate LGN spikes
                 x = generate_spontaneous_spikes(spontaneous_prob)
                 tf.nest.map_structure(lambda a, b: a.assign(b), state_variables, zero_state)    
-                _out, _, _, _ = distributed_roll_out(x, y_spontaneous, w_spontaneous, output_spikes=False)
+                _out, _, _, _, _ = distributed_roll_out(x, y_spontaneous, w_spontaneous)
                 gray_state = tuple(_out[1:])
                 strategy.run(reset_state, args=(reset_type, gray_state))
                 return gray_state
@@ -627,8 +639,11 @@ def main(_):
         it = iter(train_data_set)
         # gray_it = iter(gray_data_set)
         
-        # tf.profiler.experimental.start(logdir=logdir)
+        
         for step in range(flags.steps_per_epoch):
+            # if step > 2:
+            #     tf.profiler.experimental.start(logdir=logdir)
+            # with tf.profiler.experimental.Trace("Train", step_num=step):
             callbacks.on_step_start()
             # try resetting every iteration
             if flags.reset_every_step:
@@ -650,7 +665,7 @@ def main(_):
                         x_chunk = x_chunks[j]
                         x_spont_chunk = x_spont_chunks[j]
                         # step_values = distributed_train_step(x_chunk, y, w, x_spont_chunk, trim=chunknum==1, output_metrics=True)
-                        step_values = distributed_split_train_step(x_chunk, y, w, x_spont_chunk, trim=chunknum==1, output_metrics=True)
+                        model_spikes, step_values = distributed_split_train_step(x_chunk, y, w, x_spont_chunk, trim=chunknum==1)
                         # step_values = distributed_train_step(x, y, w, trim=chunknum==1)
                     break
                 except tf.errors.ResourceExhaustedError as e:
@@ -693,24 +708,21 @@ def main(_):
 
         # ## VALIDATION AFTER EACH EPOCH 
         # test_it = iter(test_data_set)           
-        test_it = it
-        for step in range(flags.val_steps):
-            x, y, _, w = next(it)
-            # Generate LGN spikes
-            x_spontaneous = generate_spontaneous_spikes(spontaneous_prob)
+        # test_it = it
+        # for step in range(flags.val_steps):
+        #     x, y, _, w = next(it)
+        #     # Generate LGN spikes
+        #     x_spontaneous = generate_spontaneous_spikes(spontaneous_prob)
 
-            gray_state = distributed_reset_state('gray')  
-            distributed_reset_state('gray', gray_state=gray_state)
+        #     gray_state = distributed_reset_state('gray')  
+        #     distributed_reset_state('gray', gray_state=gray_state)
 
-            # v1_spikes_spont, lm_spikes_spont, bkg_noise = distributed_validation_step(x_spontaneous, y, w, output_spikes=True) 
-            # v1_spikes, lm_spikes, _ = distributed_validation_step(x, y, w, output_spikes=True)
-            v1_spikes_spont, lm_spikes_spont, bkg_noise = distributed_roll_out(x_spontaneous, y_spontaneous, w_spontaneous, output_spikes=True)
-            v1_spikes, lm_spikes, _ = distributed_roll_out(x, y, w, output_spikes=True)
-            
-            # spikes_np = v1_spikes.numpy()
-            # with open(f'spikes_{y[0].numpy()}.pkl', 'wb') as f:
-            #     pkl.dump(spikes_np, f)
-            # print('Angulitooo:, ', y)
+        #     # v1_spikes_spont, lm_spikes_spont, bkg_noise = distributed_validation_step(x_spontaneous, y, w, output_spikes=True) 
+        #     # v1_spikes, lm_spikes, _ = distributed_validation_step(x, y, w, output_spikes=True)
+        #     _out, _, _, _, bkg_noise = distributed_roll_out(x_spontaneous, y_spontaneous, w_spontaneous)
+        #     v1_spikes_spont, lm_spikes_spont = _out[0][0], _out[0][2]
+        #     _out, _, _, _, _ = distributed_roll_out(x, y, w)
+        #     v1_spikes, lm_spikes = _out[0][0], _out[0][2]
         
         train_values = [a.result().numpy() for a in [train_accuracy, train_loss, train_firing_rate, 
                                                     train_rate_loss, train_voltage_loss, train_osi_loss]]
@@ -720,7 +732,15 @@ def main(_):
         metric_values = train_values + val_values
 
         # if the model train loss is minimal, save the model.
-        stop = callbacks.on_epoch_end(x, v1_spikes, lm_spikes, x_spontaneous, v1_spikes_spont, lm_spikes_spont, y, metric_values, bkg_noise=bkg_noise, verbose=True)    
+        v1_spikes = model_spikes[0]
+        lm_spikes = model_spikes[1]
+        v1_spikes_spont = model_spikes[2]
+        lm_spikes_spont = model_spikes[3]
+
+        bkg_noise = None
+
+        stop = callbacks.on_epoch_end(x, v1_spikes, lm_spikes, y, metric_values, bkg_noise=bkg_noise, verbose=True, 
+                                      x_spont=x_spontaneous, v1_spikes_spont=v1_spikes_spont, lm_spikes_spont=lm_spikes_spont)    
         
         if stop:
             break
@@ -728,6 +748,13 @@ def main(_):
         # Reset the metrics for the next epoch
         reset_train_metrics()
         reset_validation_metrics()
+
+    # # print the traces of the different graph functions
+    # print(distributed_reset_state.pretty_printed_concrete_signatures())
+    # print(distributed_train_step.pretty_printed_concrete_signatures())
+    # print(distributed_split_train_step.pretty_printed_concrete_signatures())
+    # print(distributed_roll_out.pretty_printed_concrete_signatures())
+    # print(generate_spontaneous_spikes.pretty_printed_concrete_signatures())
 
     normalizers = {'v1_ema': v1_ema.numpy(), 'lm_ema': lm_ema.numpy()}
     callbacks.on_train_end(metric_values, normalizers=normalizers)

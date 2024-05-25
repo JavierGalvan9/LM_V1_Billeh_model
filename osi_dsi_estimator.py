@@ -21,7 +21,7 @@ import ctypes.util
 
 # Define the environment variables for optimal GPU performance
 # os.environ['TF_GPU_THREAD_MODE'] = 'gpu_private'
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_GPU_ALLOCATOR'] = 'cuda_malloc_async'
 # os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
 print("--- CUDA version: ", tf.sysconfig.get_build_info()["cuda_version"])
@@ -169,6 +169,7 @@ def main(_):
             use_state_input=True, 
             return_state=True,
             hard_reset=flags.hard_reset,
+            connected_areas=False,
             add_rate_metric=True, 
             max_delay=5, 
             # output_completed_valid_from_time=120, 
@@ -362,7 +363,11 @@ def main(_):
 
         fr_boxplots_dir = os.path.join(logdir, f'Boxplots_OSI_DSI/Ave_Rate(Hz)')
         os.makedirs(fr_boxplots_dir, exist_ok=True)
-        fig, axs = plt.subplots(2, 1, figsize=(12, 14))
+        fig1, axs1 = plt.subplots(2, 1, figsize=(12, 14))
+
+        spontaneous_boxplots_dir = os.path.join(logdir, 'Boxplots_OSI_DSI/Spontaneous rate (Hz)')
+        os.makedirs(spontaneous_boxplots_dir, exist_ok=True)
+        fig2, axs2 = plt.subplots(2, 1, figsize=(12, 14))
 
         for axis_id, spikes, area in zip([0, 1], [v1_spikes, lm_spikes], ['v1', 'lm']):
             
@@ -373,10 +378,20 @@ def main(_):
             metrics_analysis(spikes, DG_angles, metrics=["Rate at preferred direction (Hz)", "OSI", "DSI"], 
                             directory=boxplots_dir, filename=f'Epoch_{current_epoch}')
             # Figure for Average firing rate boxplots
-            metrics_analysis(spikes, DG_angles, metrics=["Ave_Rate(Hz)"], axis=axs[axis_id],
+            metrics_analysis(spikes, DG_angles, metrics=["Ave_Rate(Hz)"], axis=axs1[axis_id],
                             directory=fr_boxplots_dir, filename=f'{area}_epoch_{current_epoch}')   
-        fig.tight_layout()
-        fig.savefig(os.path.join(fr_boxplots_dir, f'epoch_{current_epoch}.png'), dpi=300, transparent=False)
+
+            # Spontaneous analysis:
+            spontaneous_metrics_analysis = ModelMetricsAnalysis(networks[area], data_dir=flags.data_dir,
+                                                                drifting_gratings_init=100, drifting_gratings_end=500,
+                                                                area=area, analyze_core_only=True)
+            spontaneous_metrics_analysis(spikes, DG_angles, metrics=['Spontaneous rate (Hz)'], axis=axs2[axis_id],
+                                        directory=spontaneous_boxplots_dir, filename=f'{area}_epoch_{current_epoch}') 
+
+        fig1.tight_layout()
+        fig1.savefig(os.path.join(fr_boxplots_dir, f'epoch_{current_epoch}.png'), dpi=300, transparent=False)
+        fig2.tight_layout()
+        fig2.savefig(os.path.join(spontaneous_boxplots_dir, f'epoch_{current_epoch}.png'), dpi=300, transparent=False)
         plt.close()  
 
 def calculate_Firing_Rate(z, drifting_gratings_init=500, drifting_gratings_end=2500):
