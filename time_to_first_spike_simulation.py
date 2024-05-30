@@ -115,7 +115,8 @@ def main(_):
             train_recurrent_v1=flags.train_recurrent_v1, 
             train_recurrent_lm=flags.train_recurrent_lm, 
             train_input=flags.train_input, 
-            train_interarea=flags.train_interarea,
+            train_interarea_lm_v1=flags.train_interarea_lm_v1,
+            train_interarea_v1_lm=flags.train_interarea_v1_lm,
             train_noise=flags.train_noise,
             batch_size=flags.batch_size, 
             pseudo_gauss=flags.pseudo_gauss, 
@@ -124,6 +125,7 @@ def main(_):
             hard_reset=flags.hard_reset,
             add_rate_metric=True, 
             max_delay=5, 
+            connected_areas=False
             # output_completed_valid_from_time=120, 
             # output_abstract_valid_from_time=100,
             )
@@ -229,39 +231,6 @@ def main(_):
             out_file.write(f'Consumed time per simulation: {time_per_sim}\n')
             out_file.write(f'Consumed time saving: {time_per_save}\n')
 
-
-
-        ### SAVE DATA ###
-        data_path = os.path.join(flags.results_dir, "Data")
-        os.makedirs(data_path, exist_ok=True)
-        SimulationDataHDF5 = other_billeh_utils.SaveGaborSimDataHDF5(flags, data_path, networks, n_rows=10, n_cols=10, save_core_only=True)
-
-        row_ids = np.arange(0, n_rows)
-        col_ids = np.arange(0, n_cols)
-        row_ids, col_ids = np.meshgrid(row_ids, col_ids)
-        row_ids = row_ids.flatten()
-        col_ids = col_ids.flatten()
-
-        for row_id, col_id in zip(row_ids, col_ids):
-            for trial_id in range(flags.n_trials):
-                data_it = iter(data_set)
-                lgn_spikes, y, _, w = next(data_it)
-                v1_spikes, lm_spikes = distributed_roll_out(lgn_spikes)
-                # Save simulation data
-                simulation_data = {
-                    "v1": {"z": v1_spikes.numpy()},
-                    "lm": {"z": lm_spikes.numpy()},
-                    "LGN": {"z": lgn_spikes.numpy()}
-                }
-                SimulationDataHDF5(simulation_data, trial_id, row_id, col_id)
-
-        ### READ DATA ###
-        data = other_billeh_utils.load_gabor_simulation_results_hdf5(data_path)
-        # data['v1']['0_0'].shape = (n_trials, seq_len, n_neurons)
-
-
-
-
         ### RASTER PLOT ###
         images_dir = os.path.join(flags.results_dir, 'Raster_plots')
         os.makedirs(images_dir, exist_ok=True)
@@ -287,7 +256,7 @@ if __name__ == '__main__':
 
     # Define the directory to save the results
     _results_dir = 'Time_to_first_spike_analysis'
-    _checkpoint_dir = 'Benchmark_models/v1_100000_lm_14264'
+    _checkpoint_dir = 'Benchmark_models/v1_100000_lm_30000'
 
     # Define particular task flags
     absl.app.flags.DEFINE_string('results_dir', _results_dir, '')
@@ -342,7 +311,8 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_boolean('train_recurrent_v1', flags_dict.get('train_recurrent_v1', False), '')
     absl.app.flags.DEFINE_boolean('train_recurrent_lm', flags_dict.get('train_recurrent_lm', False), '')
     absl.app.flags.DEFINE_boolean('train_input', flags_dict.get('train_input', False), '')
-    absl.app.flags.DEFINE_boolean('train_interarea', flags_dict.get('train_interarea', False), '')
+    absl.app.flags.DEFINE_boolean('train_interarea_lm_v1', flags_dict.get('train_interarea_lm_v1', False), '')
+    absl.app.flags.DEFINE_boolean('train_interarea_v1_lm', flags_dict.get('train_interarea_v1_lm', False), '')
     absl.app.flags.DEFINE_boolean('train_noise', flags_dict.get('train_noise', False), '')
     absl.app.flags.DEFINE_boolean('connected_selection', flags_dict.get('connected_selection', True), '')
     absl.app.flags.DEFINE_boolean('neuron_output', flags_dict.get('neuron_output', True), '')
