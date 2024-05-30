@@ -182,6 +182,8 @@ def main(_):
         delays = [int(a) for a in flags.delays.split(',') if a != '']
 
         for row, col in [(flags.circle_row, flags.circle_column)]:
+            # print gabor position
+            print(f'Gabor position: row {row}, column {col}')
             def get_dataset_fn(regular=False):
                 def _f(input_context):
                     _data_set = gabor_patches_generator.generate_drifting_grating_tuning(

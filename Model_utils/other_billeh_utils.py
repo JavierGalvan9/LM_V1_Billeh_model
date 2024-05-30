@@ -305,11 +305,12 @@ class SaveGaborSimDataHDF5:
 
         self.data_shapes = {'v1': self.v1_data_shape, 'lm': self.lm_data_shape, 'LGN': self.LGN_data_shape}
 
-        row_ids = [6] #np.arange(0, n_rows)
-        col_ids = [5] #np.arange(0, n_cols)
+        row_ids = [flags.circle_row] #np.arange(0, n_rows)
+        col_ids = [flags.circle_column] #np.arange(0, n_cols)
         # directions = np.arange(0, 180, 45)
 
-        with h5py.File(os.path.join(self.data_path, 'simulation_data.hdf5'), 'w') as f:
+        filename = 'simulation_data_row_{}_col_{}.hdf5'.format(row_ids[0], col_ids[0])
+        with h5py.File(os.path.join(self.data_path, filename), 'w') as f:
             g = f.create_group('Data')
             # create a group for v1 and other for lm
             for key, data_shape in self.data_shapes.items():
@@ -325,7 +326,8 @@ class SaveGaborSimDataHDF5:
             g.attrs['Date'] = time.time()
                 
     def __call__(self, simulation_data, trial, row, col):
-        with h5py.File(os.path.join(self.data_path, 'simulation_data.hdf5'), 'a') as f:
+        filename = 'simulation_data_row_{}_col_{}.hdf5'.format(row, col)
+        with h5py.File(os.path.join(self.data_path, filename), 'a') as f:
             # iterate over the keys of simulation_data
             for area in simulation_data.keys():
                 for key, val in simulation_data[area].items():
