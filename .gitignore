@@ -17,5 +17,6 @@ borrar.py
 Time_to_first_spike_analysis
 spikes_test.pkl
 OSI_DSI_dataset
-receptive_field_analysis
+receptive_field_analysis/Data
+receptive_field_analysis/Raster_plots
 
