@@ -125,7 +125,7 @@ def main(_):
             hard_reset=flags.hard_reset,
             add_rate_metric=True, 
             max_delay=5, 
-            connected_areas=False
+            connected_areas=True
             # output_completed_valid_from_time=120, 
             # output_abstract_valid_from_time=100,
             )
