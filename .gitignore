@@ -18,5 +18,9 @@ Time_to_first_spike_analysis
 spikes_test.pkl
 OSI_DSI_dataset
 receptive_field_analysis/Data
+receptive_field_analysis/Data_10trials
+receptive_field_analysis/Data_50trials
+receptive_field_analysis/Data_disconnected
 receptive_field_analysis/Raster_plots
+
 
