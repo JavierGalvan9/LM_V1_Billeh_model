@@ -20,3 +20,7 @@ OSI_DSI_dataset
 receptive_field_analysis/Data
 receptive_field_analysis/Raster_plots
 
+multi_training_distributed.py
+v1_lm_spikes.pkl
+Borrar/Populations activity/prueba.png
+Neuropixels_platform_paper/data/sub-703279277_ses-719161530.nwb

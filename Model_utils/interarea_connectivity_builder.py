@@ -1,15 +1,13 @@
 import os
-import h5py
 import json
 import numpy as np
 import pandas as pd
-import pickle as pkl
 from numba import njit
 from scipy.stats import levy_stable
 import logging
 from time import time
 
-from Model_utils.network_builder import build_network_dat, build_input_dat, sort_indices, sort_indices_tf
+from Model_utils.network_builder import sort_indices
 from Model_utils.network_builder import DirectionRule_EE, DirectionRule_others
 
 
@@ -83,7 +81,7 @@ class InterareaConnectivity:
         # Define the path with the information of the synaptic_models
         synaptic_models_path = os.path.join(data_dir, 'components', "synaptic_models")
         # Create a dictionary with the parameters for every edge type
-        edge_params_keys = ['syn_weight', 'weight_function', 'weight_sigma', 'delay']
+        edge_params_keys = ['edge_type_id', 'syn_weight', 'weight_function', 'weight_sigma', 'delay']
         self.edges_params = {target_query: {} for target_query in set(edge_types_df['target_query'])}
         for index, row in edge_types_df.iterrows():
             self.edges_params[row['target_query']][row['source_query']] = {}
@@ -221,6 +219,7 @@ class InterareaConnectivity:
         base_weights_sigma = synapsis_params['weight_sigma'] 
         delays = synapsis_params['delay'] 
         receptor_ids = synapsis_params['receptor_type']
+        edge_type_ids = synapsis_params['edge_type_id']
 
         # calculate the synaptic weights
         weight_function = list(set(synapsis_params['weight_function']))[0]
@@ -242,7 +241,7 @@ class InterareaConnectivity:
             print('There is no correct weight function!')
             return None
 
-        return synaptic_weights, delays, receptor_ids
+        return synaptic_weights, delays, receptor_ids, edge_type_ids
 
     def connect_cells(self, source, target, params):
         """This function determined which nodes are connected based on the parameters in the dictionary params. The
@@ -349,6 +348,7 @@ class InterareaConnectivity:
         interarea_weights = []
         interarea_delays = []
         interarea_receptor_ids = []
+        interarea_edge_type_ids = []
 
         for source in self.interarea_connectivity.keys():
             for target in self.interarea_connectivity[source].keys():
@@ -377,12 +377,12 @@ class InterareaConnectivity:
                         random_weights = self.rd.randn(n_connections*10) + 10
                         random_weights = random_weights[random_weights > 0]
                     elif self.interarea_weight_distribution == 'billeh_weights':
-                        synaptic_weights, synaptic_delays, receptor_ids = self.assign_weight_and_delay(source, target,
+                        synaptic_weights, synaptic_delays, receptor_ids, edge_type_ids = self.assign_weight_and_delay(source, target,
                                                                                                         src_tf_ids, tgt_tf_ids,
                                                                                                         nsyns_ret)
-                        synaptic_weights = 0.5*synaptic_weights
+                        synaptic_weights = 0.25*synaptic_weights
                     elif self.interarea_weight_distribution == 'zero_weights':
-                        synaptic_weights, synaptic_delays, receptor_ids = self.assign_weight_and_delay(source, target,
+                        synaptic_weights, synaptic_delays, receptor_ids, edge_type_ids = self.assign_weight_and_delay(source, target,
                                                                                                         src_tf_ids, tgt_tf_ids,
                                                                                                         nsyns_ret)
                         synaptic_weights = np.zeros(n_connections)                                                                                                                                          
@@ -396,6 +396,7 @@ class InterareaConnectivity:
                     interarea_weights.append(synaptic_weights)
                     interarea_delays.append(synaptic_delays)
                     interarea_receptor_ids.append(receptor_ids)
+                    interarea_edge_type_ids.append(edge_type_ids)
     
                     if n_connections != 0: 
                         print(f'{source} to {target} connection time: {round(time()-t0, 2)} s.\n')
@@ -421,12 +422,13 @@ class InterareaConnectivity:
             interarea_weights = np.concatenate(interarea_weights)
             interarea_delays = np.concatenate(interarea_delays)
             interarea_receptor_ids = np.concatenate(interarea_receptor_ids)
+            interarea_edge_type_ids = np.concatenate(interarea_edge_type_ids)
 
             # rand_delays = rd.randint(low=inter_area_min_delay, high=inter_area_max_delay, size=interarea_weights.shape)
-            indices, interarea_weights, interarea_delays, interarea_receptor_ids = sort_indices(indices, interarea_weights, interarea_delays, interarea_receptor_ids)
+            indices, interarea_weights, interarea_delays, interarea_receptor_ids, interarea_edge_type_ids = sort_indices(indices, interarea_weights, interarea_delays, interarea_receptor_ids, interarea_edge_type_ids)
 
         else:
-            indices, interarea_weights, dense_shape, interarea_delays, interarea_receptor_ids = None, None, None, np.ones(1), None
+            indices, interarea_weights, dense_shape, interarea_delays, interarea_receptor_ids, interarea_edge_type_ids = None, None, None, np.ones(1), None, None
             # max_delay in model.py needs a non- None type
 
         # Create a dictionary to save the interarea connections
@@ -440,6 +442,7 @@ class InterareaConnectivity:
         self.target_network['interarea_synapses'][self.source_column_name]['delays'] = interarea_delays.astype(np.float16)
         self.target_network['interarea_synapses'][self.source_column_name]['receptor_ids'] = interarea_receptor_ids.astype(np.uint8)
         self.target_network['interarea_synapses'][self.source_column_name]['dense_shape'] = dense_shape
+        self.target_network['interarea_synapses'][self.source_column_name]['edge_type_ids'] = interarea_edge_type_ids.astype(np.uint16)
 
         print(f'Number of connections from {self.source_column_name} to {self.target_column_name}: {len(interarea_weights)}')
 

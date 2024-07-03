@@ -3,8 +3,6 @@ import h5py
 import numpy as np
 import pandas as pd
 import pickle as pkl
-import json
-import tensorflow as tf
 from Model_utils.network_builder import build_network_dat, build_input_dat, sort_indices, sort_indices_tf
 from Model_utils.interarea_connectivity_builder import InterareaConnectivity
 from time import time
@@ -17,7 +15,7 @@ def load_network(path="GLIF_network/v1_network_dat.pkl",
                  core_only=True,
                  n_neurons=51978, 
                  seed=3000, 
-                 connected_selection=False,
+                 connected_selection=True,
                  column_name='v1',
                  tensorflow_speed_up=False):
     
@@ -165,8 +163,10 @@ def load_network(path="GLIF_network/v1_network_dat.pkl",
     weights = []
     delays = []
     receptor_ids = [] # [0,1,2,3] possible values
+    edge_type_ids = []
     
     for edge in edges:
+        edge_type_id = edge["edge_type_id"]
         target_tf_ids = bmtk_id_to_tf_id[edge["target"]]
         source_tf_ids = bmtk_id_to_tf_id[edge["source"]]
         edge_exists = np.logical_and(target_tf_ids != -1, source_tf_ids != -1)
@@ -189,20 +189,22 @@ def load_network(path="GLIF_network/v1_network_dat.pkl",
         weights.append(weights_tf)
         delays.append(delays_tf)
         receptor_ids.append(receptor_id)
+        edge_type_ids.append(np.full(n_new_edge, edge_type_id, dtype=np.uint16))
 
     print(f'> Number of Synapses: {n_edges}')
     indices = np.concatenate(indices, axis=0, dtype=np.int32)
     weights = np.concatenate(weights, axis=0, dtype=np.float32)
     delays = np.concatenate(delays, axis=0, dtype=np.float16)
     receptor_ids = np.concatenate(receptor_ids, axis=0, dtype=np.uint8)
+    edge_type_ids = np.concatenate(edge_type_ids, axis=0, dtype=np.uint16)
 
     # sort indices by considering first all the targets of node 0, then all of node 1, ...
     if tensorflow_speed_up:
         # indices, weights, delays = sort_indices_tf(indices, weights, delays)
-        indices, weights, delays, receptor_ids = sort_indices_tf(indices, weights, delays, receptor_ids)
+        indices, weights, delays, receptor_ids, edge_type_ids = sort_indices_tf(indices, weights, delays, receptor_ids, edge_type_ids)
     else:
         # indices, weights, delays = sort_indices(indices, weights, delays)
-        indices, weights, delays, receptor_ids = sort_indices(indices, weights, delays, receptor_ids)
+        indices, weights, delays, receptor_ids, edge_type_ids = sort_indices(indices, weights, delays, receptor_ids, edge_type_ids)
 
     network = dict(
         x=x, y=y, z=z,
@@ -213,7 +215,7 @@ def load_network(path="GLIF_network/v1_network_dat.pkl",
         node_params=node_params,
         node_type_ids=node_type_ids,
         synapses=dict(indices=indices, weights=weights, delays=delays, 
-                      receptor_ids=receptor_ids,
+                      receptor_ids=receptor_ids, edge_type_ids=edge_type_ids,
                       dense_shape=dense_shape),
         tf_id_to_bmtk_id=tf_id_to_bmtk_id,
         bmtk_id_to_tf_id=bmtk_id_to_tf_id,
