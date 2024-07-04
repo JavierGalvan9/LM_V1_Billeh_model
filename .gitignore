@@ -32,3 +32,7 @@ receptive_field_analysis/RFs
 receptive_field_analysis/size_tunning_all_plots
 receptive_field_analysis/rf_data
 
+multi_training_distributed.py
+v1_lm_spikes.pkl
+Borrar/Populations activity/prueba.png
+Neuropixels_platform_paper/data/sub-703279277_ses-719161530.nwb

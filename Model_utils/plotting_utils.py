@@ -251,7 +251,17 @@ class LaminarPlot:
             self.core_mask = other_billeh_utils.isolate_core_neurons(
                 self.network, n_selected_neurons=self.core_neurons, data_dir=self.data_dir)
         else:
-            self.core_mask = np.full(self.n_neurons, True)
+            if self.area_name == 'v1':
+                self.core_neurons = 51978
+            elif self.area_name == 'lm':
+                self.core_neurons = int(51978/v1_to_lm_neurons_ratio)
+                
+            if self.n_neurons > self.core_neurons:
+                self.n_neurons = self.core_neurons
+
+            # self.core_mask = np.full(self.n_neurons, True)
+            self.core_mask = other_billeh_utils.isolate_core_neurons(
+                self.network, n_selected_neurons=self.core_neurons, data_dir=self.data_dir)
 
         node_types = pd.read_csv(os.path.join(data_dir, f'network/{self.area_name}_node_types.csv'), sep=' ')
         path_to_h5 = os.path.join(data_dir, f'network/{self.area_name}_nodes.h5')
@@ -634,9 +644,7 @@ class PopulationActivity:
             plt.close(fig)
 
     def subplot_populations_activity(self, bin_size=10):
-        layers_label = ['Inhibitory L1 neurons', 'Inhibitory L23 neurons', 'Excitatory L23 neurons',
-                        'Inhibitory L4 neurons', 'Excitatory L4 neurons', 'Inhibitory L5 neurons',
-                        'Excitatory L5 neurons', 'Inhibitory L6 neurons', 'Excitatory L6 neurons']
+        layers_label = ['I1', 'I23', 'E23', 'I4', 'E4', 'I5', 'E5', 'I6', 'E6']
         neuron_class_bounds = np.concatenate((self.ie_bounds, self.layer_bounds))
         neuron_class_bounds = np.append(neuron_class_bounds, self.n_neurons)
         neuron_class_bounds.sort()
@@ -651,6 +659,7 @@ class PopulationActivity:
             class_spikes = self.spikes[:, neuron_ids]
             m, n = class_spikes.shape
             H, W = int(m/bin_size), 1  # block-size
+            
             n_spikes_bin = class_spikes.reshape(H, m//H, W, n//W).sum(axis=(1, 3))
             population_activity = n_spikes_bin/(n_neurons_class*bin_size*0.001)
             population_activity_dict[label] = population_activity
@@ -659,7 +668,7 @@ class PopulationActivity:
         fig = plt.figure(constrained_layout=False)
         # fig.set_constrained_layout_pads(w_pad=4 / 72, h_pad=4 / 72, hspace=0.15, wspace=0.15)
         ax1 = plt.subplot(5, 1, 1)
-        plt.plot(time, population_activity_dict['Inhibitory L1 neurons'], label='Inhibitory L1 neurons', color='b')
+        plt.plot(time, population_activity_dict['I1'], label='I1', color='b')
         plt.legend(fontsize=6)
         plt.tick_params(axis='both', labelsize=7)
         # plt.xlabel('Time (ms)', fontsize=7)
