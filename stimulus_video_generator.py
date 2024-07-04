@@ -16,7 +16,25 @@ def circle_heatmap(x0, y0, r = 10):
 
     r = r-0.5 # to make the circle of radius r pixels
 
-    grid_x = np.linspace(30, 210, 17) # 17 points
+    grid_x = np.linspace(50, 190, 13) # 13 points
+    grid_y = np.linspace(10, 110, 11) # 11 points
+
+    x0 = grid_x[x0] 
+    y0 = grid_y[y0] 
+
+    for x in range(heatmap.shape[1]):
+        for y in range(heatmap.shape[0]):
+            if (x - x0)**2 + (y - y0)**2 <= r**2:
+                heatmap[y, x] = 1
+
+    return heatmap
+
+def inverse_circle_heatmap(x0, y0, r = 10):
+    heatmap = np.ones((120, 240))
+
+    r = r-0.5 # to make the circle of radius r pixels
+
+    grid_x = np.linspace(30, 210, 13) # 17 points
     grid_y = np.linspace(10, 110, 11) # 11 points
 
     x0 = grid_x[x0] 
@@ -25,12 +43,12 @@ def circle_heatmap(x0, y0, r = 10):
     for x in range(heatmap.shape[1]):
         for y in range(heatmap.shape[0]):
             if (x - x0)**2 + (y - y0)**2 <= r**2:
-                heatmap[y, x] = 1
+                heatmap[y, x] = 0
 
     return heatmap
 
 # Create the 3D mask from the circle heatmap
-def create_gabor_mask(x0, y0, seq_len, r = 10):
+def create_gabor_mask(x0, y0, seq_len, r = 10, inverse = False):
     """
     Create a 3D mask from a circle heatmap.
 
@@ -43,7 +61,10 @@ def create_gabor_mask(x0, y0, seq_len, r = 10):
     Returns:
         tf.Tensor: The 3D mask.
     """
-    mask = circle_heatmap(x0, y0, r)
+    if inverse:
+        mask = inverse_circle_heatmap(x0, y0, r)
+    else:
+        mask = circle_heatmap(x0, y0, r)
     mask_3d = tf.tile(mask[None, :, :], [seq_len, 1, 1])
     mask_3d = tf.cast(mask_3d, tf.float32)
     
@@ -51,7 +72,7 @@ def create_gabor_mask(x0, y0, seq_len, r = 10):
 
 @tf.function # Sometimes this function is called with different phase, causing 
 def make_moving_gabors_stimulus(row_size=120, col_size=240, moving_flag=True, image_duration=100, cpd=0.05,
-                                   temporal_f=2, theta=None, phase=0, contrast=1.0, x0 = 0, y0 = 0, r=10):
+                                   temporal_f=2, theta=None, phase=0, contrast=1.0, x0 = 0, y0 = 0, r=10, inverse = False):
     """
     Generates a drifting grating stimulus.
 
@@ -92,7 +113,7 @@ def make_moving_gabors_stimulus(row_size=120, col_size=240, moving_flag=True, im
     data = contrast * tf.sin(2 * np.pi * (cpd * xy + temporal_f * tt) + phase_rad)
 
     # create a gabor filter at grey background -----------------------------------------------
-    mask_3d = create_gabor_mask(x0, y0, image_duration, r = r) # returns the mask already in tf format
+    mask_3d = create_gabor_mask(x0, y0, image_duration, r = r, inverse = inverse) # returns the mask already in tf format
 
     # Apply the mask to the data
     masked_data = data * mask_3d  # 0 is the grey background
@@ -219,7 +240,7 @@ def generate_drifting_grating_video(phase=None, orientation=None, temporal_f=2, 
 
 def generate_gabor_patches_video(phase=None, orientation=None, temporal_f=2, cpd=0.04, contrast=0.8, 
                                      seq_len=600, pre_delay=50, post_delay=50, moving_flag=True, 
-                                     x0 = 0, y0 = 0, r = 10):
+                                     x0 = 0, y0 = 0, r = 10, inverse = False):
     """
     Generates a drifting grating tuning video.
 
@@ -245,7 +266,7 @@ def generate_gabor_patches_video(phase=None, orientation=None, temporal_f=2, cpd
     # Generate the drifting grating stimulus for the given duration and parameters
     movie = make_moving_gabors_stimulus(image_duration=duration, cpd=cpd, temporal_f=temporal_f, 
                                            theta=theta, phase=phase, contrast=contrast, moving_flag=moving_flag, 
-                                           x0 = x0, y0 = y0, r = r)
+                                           x0 = x0, y0 = y0, r = r, inverse = inverse)
 
     # Concatenate the movie with pre and post delay periods
     video = movies_concat(movie, pre_delay, post_delay)
@@ -270,8 +291,14 @@ def generate_gabor_patches_video(phase=None, orientation=None, temporal_f=2, cpd
 # 1. Select the function generate_gabor_patches
 # Select an x0 and y0 position for the circle mask
 #--------------------------------------------------------------------------
-video = generate_gabor_patches_video(temporal_f=2, cpd=0.04, contrast=1, seq_len=350, moving_flag=True, orientation = 45, x0 = 3, y0 = 3) # gabor patches
-#video = generate_drifting_grating_video(temporal_f=0, cpd=0, contrast=1, seq_len=350, moving_flag=False, phase = 90) # full-field flash
+# video = generate_gabor_patches_video(temporal_f=2, cpd=0.04, contrast=1, seq_len=350, moving_flag=True, orientation = 45, x0 = 3, y0 = 3) # gabor patches
+
+video = generate_gabor_patches_video(temporal_f=2, cpd=0.04, contrast=1, seq_len=350, moving_flag=True, orientation = 45, 
+                                     x0 = 6, y0 = 5, r = 10, inverse = True) # gabor patches inverse
+
+#video = generate_drifting_grating_video(temporal_f=0, cpd=0, contrast=-1, seq_len=350, moving_flag=False, phase = 90) # full-field flash
+
 #video = generate_drifting_grating_video(temporal_f=40, cpd=0.04, contrast=0.8, seq_len=350, moving_flag=True) # moving gratings
+
 video = ((video + 1) * 127.5).astype(np.uint8) # normalize to 0-255
-imageio.mimsave('animations/gabor_patches.gif', video, fps=30)  # Adjust fps as needed
+imageio.mimsave('animations/gabor_patches_inverse.gif', video, fps=30)  # Adjust fps as needed
