@@ -125,7 +125,7 @@ def main(_):
             hard_reset=flags.hard_reset,
             add_rate_metric=True, 
             max_delay=5, 
-            connected_areas=True,
+            connected_areas=False,
             # output_completed_valid_from_time=120, 
             # output_abstract_valid_from_time=100,
             )
@@ -199,7 +199,8 @@ def main(_):
                         temporal_f = 2,
                         cpd = 0.04,
                         contrast = 1,
-                        moving_flag = True
+                        moving_flag = True, 
+                        inverse = True
                     ).batch(1)
                                 
                     return _data_set
@@ -228,7 +229,7 @@ def main(_):
                     "lm": {"z": lm_spikes.numpy()},
                     "LGN": {"z": lgn_spikes.numpy()}
                 }
-                SimulationDataHDF5(simulation_data, trial_id, row, col)
+                SimulationDataHDF5(simulation_data, trial_id, row, col, flags.radius_circle)
                 time_per_save += time() - t0
                 print(f'    Trial running time: {time() - t0:.2f}s')
                 mem_data = printgpu(verbose=1)
@@ -279,7 +280,7 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_string('delays', '500,500', '')
 
     # flags for gabor patches
-    absl.app.flags.DEFINE_integer('orientation', 45, '')
+    absl.app.flags.DEFINE_integer('orientation', 0, '')
     absl.app.flags.DEFINE_integer('circle_row', 6, '')
     absl.app.flags.DEFINE_integer('circle_column', 5, '')
     absl.app.flags.DEFINE_integer('radius_circle', 10, '')

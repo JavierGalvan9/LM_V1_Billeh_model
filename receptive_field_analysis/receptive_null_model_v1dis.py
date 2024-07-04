@@ -18,63 +18,64 @@ n_cols = 11
 v1_sums_dis = v1_sums_dis / (n_trials * n_timesteps) * 1000
 v1_sums_trials_dis = v1_sums_trials_dis / (n_timesteps) * 1000
 
-n_null_models = 1000
+n_shuffles = 1000
 # Now for V1 disconnected
-null_chi2_v1_dis = np.zeros((n_neurons_v1, n_null_models))
+null_chi2_v1_dis = np.zeros((n_neurons_v1, n_shuffles))
 real_chi2_v1_dis = np.zeros((n_neurons_v1))
 
 for neuron in range(n_neurons_v1):
-    neuron_rf = v1_sums_dis[:,:,neuron] # select the neuron
+    neuron_rf = np.copy(v1_sums_dis[:,:,neuron]) # select the neuron
     neuron_rf_trials = v1_sums_trials_dis[:,:,:,neuron] # select the neuron
 
-    # set to median all the values below a th
-    median = np.median(neuron_rf)
-    th = median - 2*np.std(neuron_rf)
-    neuron_rf[neuron_rf < th] = median
+    percentile_5 = np.percentile(neuron_rf, 2.5)
+    percentile_95 = np.percentile(neuron_rf, 97.5)
+    percentile_median = np.median(neuron_rf[(neuron_rf > percentile_5) & (neuron_rf < percentile_95)])
+    # set 0.0 values to percentile median
+    neuron_rf[np.round(neuron_rf) == 0.0] = percentile_median
 
     # compute expected value
-    expected_value = np.mean(neuron_rf)
+    expected_value = np.median(neuron_rf)
+    th = expected_value - 5*np.std(neuron_rf)
+    neuron_rf[neuron_rf < th] = expected_value
+
     # compute residuals
     residuals = (neuron_rf - expected_value)**2 / expected_value
+    max_residuals = np.max(residuals)
 
     # compute chi^2
-    chi2 = np.sum(residuals)
-    real_chi2_v1_dis[neuron] = chi2
+    real_chi2_v1_dis[neuron] = np.sum(residuals)
 
-    # null model
-    for k in range(n_null_models):
+    for i in range(n_shuffles):
         # create a matrix to store the shuffled RFs
         shuffled_rf = np.zeros((n_rows, n_cols))
 
-        for trial in range(n_trials):
-            # shuffle the RF
-            rf_flatten = neuron_rf_trials[:,:,trial].flatten()
-            rf_shuffled = np.random.shuffle(rf_flatten)
-            rf_shuffled = rf_flatten.reshape(n_rows, n_cols)
+        flattened_arr = neuron_rf_trials.flatten()
+        bootstrap_sample = np.random.choice(flattened_arr, size=flattened_arr.size, replace=True)
+        bootstrap_arr = bootstrap_sample.reshape(neuron_rf_trials.shape)
 
-            # add the shuffled RF to the matrix
-            shuffled_rf += rf_shuffled
-
-        # average over trials
-        shuffled_rf /= n_trials
+        shuffled_rf = np.mean(bootstrap_arr, axis = 2)
 
         # set to the median all the values below a th
-        median = np.median(shuffled_rf)
-        th = median - 2*np.std(shuffled_rf)
-        shuffled_rf[shuffled_rf < th] = median
+        percentile_5 = np.percentile(shuffled_rf, 2.5)
+        percentile_95 = np.percentile(shuffled_rf, 97.5)
+        percentile_median = np.median(shuffled_rf[(shuffled_rf > percentile_5) & (shuffled_rf < percentile_95)])
+        # set 0.0 values to percentile median
+        shuffled_rf[np.round(shuffled_rf) == 0.0] = percentile_median
 
-        # compute the expected value
-        expected_value = np.mean(shuffled_rf)
+        # compute expected value
+        expected_value = np.median(shuffled_rf)
+        th = expected_value - 5*np.std(shuffled_rf)
+        shuffled_rf[shuffled_rf < th] = expected_value
+
         # compute residuals
         residuals = (shuffled_rf - expected_value)**2 / expected_value
 
         # compute chi^2
-        chi2_null = np.sum(residuals)
-        null_chi2_v1_dis[neuron, k] = chi2_null
+        null_chi2_v1_dis[neuron, i] = np.sum(residuals)
 
 # save the data
-with open('Data_disconnected/null_chi2_v1_dis_trials.pkl', 'wb') as f:
+with open('Data_disconnected/null_chi2_v1_dis_trials_bootstrap.pkl', 'wb') as f:
     pkl.dump(null_chi2_v1_dis, f)
 
-with open('Data_disconnected/real_chi2_v1_dis_trials.pkl', 'wb') as f:
+with open('Data_disconnected/real_chi2_v1_dis_trials_bootstrap.pkl', 'wb') as f:
     pkl.dump(real_chi2_v1_dis, f)
