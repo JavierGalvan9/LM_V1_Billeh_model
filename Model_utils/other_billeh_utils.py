@@ -8,6 +8,7 @@ import pandas as pd
 import os
 import sys
 import numpy as np
+import tensorflow as tf
 import h5py
 import time
 from scipy.ndimage import gaussian_filter1d
@@ -157,6 +158,26 @@ def voltage_spike_effect_correction(v, z, pre_spike_gap=2, post_spike_gap=3):
                         post_spike_gap, neuron_id] = new_values
     return v
 
+
+def optimizers_match(current_optimizer, checkpoint_directory):
+    current_optimizer_vars = {v.name: v.shape.as_list() for v in current_optimizer.variables()}
+    checkpoint_vars = tf.train.list_variables(checkpoint_directory)
+    checkpoint_optimizer_vars = {name.split('/.ATTRIBUTES')[0]: value for name, value in checkpoint_vars if 'optimizer' in name}
+    if len(current_optimizer_vars) != len(checkpoint_optimizer_vars)-1:
+        print('Checkpoint optimizer variables do not match the current optimizer variables.. Renewing optimizer...')
+        return False
+    else:
+        for name, desired_shape in current_optimizer_vars.items():
+            var_not_matched = True
+            for opt_var, opt_var_shape in checkpoint_optimizer_vars.items():
+                if opt_var_shape == desired_shape: 
+                    var_not_matched = False
+                    del checkpoint_optimizer_vars[opt_var]
+                    break
+            if var_not_matched:
+                print(f'{name} does not have a match')
+                return False
+        return True
 
 # def load_simulation_results(full_data_path, area='v1', n_simulations=None, skip_first_simulation=False,
 #                             variables=None, simulation_length=2500, n_neurons=51978):

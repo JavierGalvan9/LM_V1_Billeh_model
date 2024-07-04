@@ -102,7 +102,8 @@ def add_nodes(data_dir='GLIF_network', source='v1'):
     nodes_list = []
     for node_type_id in node_types_df["node_type_id"]:
         mask = source_node_type_ids == node_type_id
-        new_pop_dict = {"ids": source_node_ids[mask]}
+        new_pop_dict = {"node_type_id": node_type_id}
+        new_pop_dict["ids"] = source_node_ids[mask]
         # Get the node parameters
         node_params_file = os.path.join(cell_models_path, f"{node_type_id}_glif_lif_asc_config.json")
         with open(node_params_file) as f:
@@ -143,7 +144,8 @@ def add_edges(data_dir='GLIF_network', source='v1', target='v1'):
             tuning_angle = nodes_h5_file["nodes"]['v1']["0"]['tuning_angle'][()].astype(np.float32)
 
     for idx, edge_row in edges_type_df.iterrows():
-        mask = edge_type_ids == edge_row['edge_type_id']
+        edge_type_id = edge_row['edge_type_id']
+        mask = edge_type_ids == edge_type_id
         src_ids = source_node_ids[mask]
         trg_ids = target_node_ids[mask]
         nsyn_ret = nsyns[mask]
@@ -173,6 +175,7 @@ def add_edges(data_dir='GLIF_network', source='v1', target='v1'):
             receptor_type = synaptic_model_dict["receptor_type"]
 
         new_pop_dict = {
+            "edge_type_id": edge_type_id,
             "source": src_ids,
             "target": trg_ids,
             "params": {
