@@ -328,9 +328,10 @@ class SaveGaborSimDataHDF5:
 
         row_ids = [flags.circle_row] #np.arange(0, n_rows)
         col_ids = [flags.circle_column] #np.arange(0, n_cols)
+        r = flags.radius_circle
         # directions = np.arange(0, 180, 45)
 
-        filename = 'simulation_data_row_{}_col_{}.hdf5'.format(row_ids[0], col_ids[0])
+        filename = 'simulation_data_row_{}_col_{}_r{}.hdf5'.format(row_ids[0], col_ids[0], r)
         with h5py.File(os.path.join(self.data_path, filename), 'w') as f:
             g = f.create_group('Data')
             # create a group for v1 and other for lm
@@ -346,8 +347,8 @@ class SaveGaborSimDataHDF5:
                     g.attrs[flag] = val
             g.attrs['Date'] = time.time()
                 
-    def __call__(self, simulation_data, trial, row, col):
-        filename = 'simulation_data_row_{}_col_{}.hdf5'.format(row, col)
+    def __call__(self, simulation_data, trial, row, col, r):
+        filename = 'simulation_data_row_{}_col_{}_r{}.hdf5'.format(row, col, r)
         with h5py.File(os.path.join(self.data_path, filename), 'a') as f:
             # iterate over the keys of simulation_data
             for area in simulation_data.keys():
