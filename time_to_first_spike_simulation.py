@@ -125,7 +125,7 @@ def main(_):
             hard_reset=flags.hard_reset,
             add_rate_metric=True, 
             max_delay=5, 
-            connected_areas=True
+            connected_areas=True # connected areas!
             # output_completed_valid_from_time=120, 
             # output_abstract_valid_from_time=100,
             )
@@ -192,7 +192,7 @@ def main(_):
                     regular=regular,
                     temporal_f = 0,
                     cpd = 0,
-                    contrast = 1,
+                    contrast = -1, # -1 --> black flash, 1 --> white flash
                     phase = 90, 
                     moving_flag = False
                 ).batch(1)
