@@ -16,15 +16,15 @@ class StiffRegularizer(Layer):
         self._dtype = dtype
         self._penalize_relative_change = penalize_relative_change
         # Compute voltage scale
-        voltage_scale = (network['node_params']['V_th'] - network['node_params']['E_L']).astype(np.float16)
+        voltage_scale = (network['node_params']['V_th'] - network['node_params']['E_L']).astype(np.float32)
         # Get the initial weights and properly scale them down
         if recurrent_weights:
             indices = network["synapses"]["indices"]
-            initial_value = np.array(network["synapses"]["weights"], dtype=np.float16)
+            initial_value = np.array(network["synapses"]["weights"], dtype=np.float32)
             edge_type_ids = network['synapses']['edge_type_ids']
         else:
             indices = network['interarea_synapses'][source_area]["indices"]
-            initial_value = np.array(network['interarea_synapses'][source_area]["weights"], dtype=np.float16)
+            initial_value = np.array(network['interarea_synapses'][source_area]["weights"], dtype=np.float32)
             edge_type_ids = network['interarea_synapses'][source_area]["edge_type_ids"]
 
         # Scale initial values by the voltage scale of the node IDs
@@ -39,22 +39,24 @@ class StiffRegularizer(Layer):
         initial_mean_weights = sum_weights / count_weights
         # Determine target mean weights
         if self._penalize_relative_change:
-            epsilon = np.float16(1e-3)
-            target_mean_weights = np.maximum(np.abs(initial_mean_weights), epsilon)
-        else:
-            target_mean_weights = initial_mean_weights
+            epsilon = np.float32(1e-4)
+            denominator = np.maximum(np.abs(initial_mean_weights), epsilon)
+            self._denominator = tf.constant(denominator, dtype=dtype)
+
+        tf.print(initial_mean_weights)
+        tf.print(np.min(np.abs(initial_mean_weights)))
 
         self.idx = tf.constant(self.idx, dtype=tf.int32)
         self.num_unique = tf.constant(self.num_unique, dtype=tf.int32)
-        self._target_mean_weights = tf.constant(target_mean_weights, dtype=dtype)
-
+        self._target_mean_weights = tf.constant(initial_mean_weights, dtype=dtype)
+    
     def __call__(self, x):
         # if x.dtype != self._dtype:
         #     x = tf.cast(x, self._dtype)
         mean_edge_type_weights = tf.math.unsorted_segment_mean(x, self.idx, self.num_unique)
         if self._penalize_relative_change:
             # return self._strength * tf.reduce_mean(tf.abs(x - self._initial_value))
-            relative_deviation = (mean_edge_type_weights - self._target_mean_weights) / self._target_mean_weights
+            relative_deviation = (mean_edge_type_weights - self._target_mean_weights) / self._denominator
             # Penalize the relative deviation
             reg_loss = tf.sqrt(tf.reduce_mean(tf.square(relative_deviation)))
         else:
@@ -67,20 +69,21 @@ class L2Regularizer(tf.keras.regularizers.Regularizer):
     def __init__(self, strength, network, flags, penalize_relative_change=False, recurrent_weights=True, source_area='lm', dtype=tf.float32):
         super().__init__()
         self._strength = strength
-        # Get the initial weights and properly scale them down
-        if recurrent_weights:
-            indices = np.array(network["synapses"]["indices"], dtype=tf.int32)
-            weights = np.array(network["synapses"]["weights"], dtype=dtype)
-        else:
-            indices = np.array(network['interarea_synapses'][source_area]["indices"], dtype=tf.int32)
-            weights = np.array(network['interarea_synapses'][source_area]["weights"], dtype=dtype)
-
-        _params = dict(network['node_params'])
-        voltage_scale = _params['V_th'] - _params['E_L']
-        _node_type_ids = network['node_type_ids']
-        initial_value = (weights/voltage_scale[_node_type_ids[indices[:, 0]]]) / flags.lr_scale
-        self._initial_value = tf.constant(initial_value, dtype=dtype)
+        self._dtype = dtype
+        self._penalize_relative_change = penalize_relative_change
         if penalize_relative_change:
+            # Get the initial weights and properly scale them down
+            if recurrent_weights:
+                indices = np.array(network["synapses"]["indices"], dtype=tf.int32)
+                weights = np.array(network["synapses"]["weights"], dtype=np.float32)
+            else:
+                indices = np.array(network['interarea_synapses'][source_area]["indices"], dtype=tf.int32)
+                weights = np.array(network['interarea_synapses'][source_area]["weights"], dtype=np.float32)
+
+            _params = dict(network['node_params'])
+            voltage_scale = _params['V_th'] - _params['E_L']
+            _node_type_ids = network['node_type_ids']
+            initial_value = (weights/voltage_scale[_node_type_ids[indices[:, 0]]]) / flags.lr_scale
             # using the edge_type ids group calculate the mean weight of each type of edge in the network and then create a constant with same shape as weights and with each value corresponding to the populations mean
             # Calculate mean weights for each edge type
             if recurrent_weights:
@@ -90,8 +93,8 @@ class L2Regularizer(tf.keras.regularizers.Regularizer):
             unique_edge_type_ids, inverse_indices = np.unique(edge_type_ids, return_inverse=True)
             mean_weights = np.array([np.mean(initial_value[edge_type_ids == edge_type_id]) for edge_type_id in unique_edge_type_ids])
             # Create target mean weights array based on the edge type indices
-            self._target_mean_weights = tf.constant(mean_weights[inverse_indices], dtype=dtype)
-            epsilon = tf.constant(1e-2, dtype=tf.float32)  # A small constant to avoid division by zero
+            self._target_mean_weights = tf.constant(mean_weights[inverse_indices], dtype=self._dtype)
+            epsilon = tf.constant(1e-4, dtype=tf.float32)  # A small constant to avoid division by zero
             self._target_mean_weights = tf.maximum(tf.abs(self._target_mean_weights), epsilon)
         else:
             self._target_mean_weights = None
@@ -145,7 +148,6 @@ def neuropixels_cell_type_to_cell_type(pop_name):
         class_name = 'Htr3a'
 
     return f"{layer} {class_name}"
-
 
 def sample_firing_rates(firing_rates, n_neurons, rnd_seed):
     # Sort the original firing rates
@@ -304,6 +306,160 @@ class SpikeRateDistributionTarget:
 
 
 class SynchronizationLoss(Layer):
+    def __init__(self, network, sync_cost=10., t_start=None, t_end=None, n_samples=50, data_dir='GLIF_network', 
+                 area='v1', session='evoked', dtype=tf.float32, core_mask=None, **kwargs):
+        super(SynchronizationLoss, self).__init__(dtype=dtype, **kwargs)
+        self._sync_cost = sync_cost
+        self._t_start = t_start
+        self._t_end = t_end
+        self._t_start_seconds = int(t_start * 1000)
+        self._t_end_seconds = int(t_end * 1000)
+        self._area = area
+        self._core_mask = core_mask
+        self._data_dir = data_dir
+        self._dtype = dtype
+        self._n_samples = n_samples
+
+        pop_names = other_billeh_utils.pop_names(network)
+        if self._core_mask is not None:
+            pop_names = pop_names[core_mask]
+        node_ei = np.array([pop_name[0] for pop_name in pop_names])
+        node_id = np.arange(len(node_ei))
+        # Get the IDs for excitatory neurons
+        node_id_e = node_id[node_ei == 'e']
+        self.node_id_e = tf.constant(node_id_e, dtype=tf.int32)
+        # Pre-define bin sizes (same as experimental data)
+        bin_sizes = np.logspace(-3, 0, 20)
+        # using the simulation length, limit bin_sizes to define at least 2 bins
+        bin_sizes_mask = bin_sizes < (self._t_end - self._t_start)/2
+        self.bin_sizes = bin_sizes[bin_sizes_mask]
+        self.bin_edges = [tf.range(self._t_start, self._t_end, delta=bin_size) for bin_size in self.bin_sizes]
+        # Prepare timestamps
+        time = tf.range(self._t_start_seconds, self._t_end_seconds, dtype=self._dtype) / 1000
+        self.time = time[:, tf.newaxis]
+        self.empty_time = tf.constant(np.nan, dtype=self._dtype)
+
+        # Load the experimental data
+        experimental_data_path = os.path.join(data_dir, f'all_fano_300ms_{session}.npy')
+        experimental_fanos = np.load(experimental_data_path, allow_pickle=True)
+        # Calculate mean, standard deviation, and SEM of the Fano factors
+        experimental_fanos_mean = np.nanmean(experimental_fanos, axis=0)
+        self.experimental_fanos_mean = tf.constant(experimental_fanos_mean[bin_sizes_mask], dtype=self._dtype)
+
+        # Set up Huber loss
+        # self.huber_loss = tf.keras.losses.Huber(delta=1.0, reduction=tf.keras.losses.Reduction.NONE)
+
+    def pop_fano_tf(self, spikes, t_start=0.2, t_end=2.0, bin_edges=None, bin_sizes=None):
+        # Convert t_start and t_end to tensors
+        t_start = tf.constant(t_start, dtype=self._dtype)
+        t_end = tf.constant(t_end, dtype=self._dtype)
+        # Initialize the Fano factors tensor
+        fanos = tf.TensorArray(dtype=self._dtype, size=len(bin_sizes))
+        for i in range(len(bin_sizes)):
+            sp_counts = tf.histogram_fixed_width(spikes, [t_start, t_end], nbins=len(bin_edges[i])-1)
+            sp_counts = tf.cast(sp_counts, self._dtype)
+            mean_count = tf.reduce_mean(sp_counts)
+            var_count = tf.math.reduce_variance(sp_counts)
+            fanos = tf.cond( 
+                mean_count > 0,
+                lambda: fanos.write(i, var_count / mean_count),
+                lambda: fanos.write(i, 0)
+            ) 
+
+        return fanos.stack()
+
+    def __call__(self, spikes, trim=True):
+
+        if self._core_mask is not None:
+            spikes = tf.boolean_mask(spikes, self._core_mask, axis=2)
+
+        spikes = tf.cast(spikes, tf.bool)  # Convert to boolean
+        n_trials = tf.shape(spikes)[0]
+
+        # spikes = spike_trimming(spikes, pre_delay=pre_delay, post_delay=post_delay, trim=trim)
+        if trim:
+            spikes = spikes[:, self._t_start_seconds:self._t_end_seconds, :]
+            time = self.time
+            t_start = self._t_start
+            t_end = self._t_end
+            bin_sizes = self.bin_sizes
+            bin_edges = self.bin_edges
+            experimental_fanos_mean = self.experimental_fanos_mean
+        else:
+            # spikes = spikes[:, self._t_start_seconds:, :]
+            # time = tf.range(self._t_start_seconds, spikes.shape[1]+self._t_start_seconds, dtype=self._dtype) / 1000
+            time = tf.range(0, spikes.shape[1], dtype=self._dtype) / 1000
+            time = time[:, tf.newaxis]
+            # t_start = self._t_start
+            # t_end = (spikes.shape[1] + self._t_start_seconds) / 1000
+            t_start = 0
+            t_end = spikes.shape[1] / 1000
+            # using the simulation length, limit bin_sizes to define at least 2 bins
+            bin_sizes_mask = self.bin_sizes < (t_end - t_start)/2
+            bin_sizes = self.bin_sizes[bin_sizes_mask]
+            bin_edges = [tf.range(t_start, t_end, delta=bin_size) for bin_size in bin_sizes]
+            experimental_fanos_mean = self.experimental_fanos_mean[bin_sizes_mask]
+
+            # time = tf.range(0, new_spikes.shape[1], dtype=self._dtype) / 1000
+            # time = time[:, tf.newaxis]
+            # t_start = 0
+            # t_end = new_spikes.shape[1] / 1000
+            # # using the simulation length, limit bin_sizes to define at least 5 bins
+            # bin_sizes_mask = self.bin_sizes < (t_end - t_start)/5
+            # tf.print(self.bin_sizes, bin_sizes_mask)
+            # bin_sizes = self.bin_sizes[bin_sizes_mask]
+            # bin_edges = [tf.range(t_start, t_end, delta=bin_size) for bin_size in bin_sizes]
+            # experimental_fanos_mean = self.experimental_fanos_mean[bin_sizes_mask]
+           
+        # Generate Fano factors across 100 random samples
+        fanos = tf.TensorArray(dtype=self._dtype, size=self._n_samples)
+        # ensure that the sample counts are at least 1
+        sample_counts = tf.maximum(tf.cast(tf.random.normal([self._n_samples], mean=68, stddev=10), tf.int32), 1)
+        # ensure that no sample count is larger than the number of neurons
+        sample_counts = tf.minimum(sample_counts, tf.shape(self.node_id_e)[0])
+        # choose random trials to sample from (usually we only have 1 trial to sample from)
+        sample_trials = tf.random.uniform([self._n_samples], minval=0, maxval=n_trials, dtype=tf.int32)
+        shuffled_e_ids = tf.random.shuffle(self.node_id_e)
+        previous_id = tf.constant(0, dtype=tf.int32)
+
+        for i in tf.range(self._n_samples):
+            sample_num = sample_counts[i] 
+            sample_trial = sample_trials[i]
+            ## randomly choose sample_num ids from self.node_id_e with replacement
+            # sample_ids = tf.random.shuffle(self.node_id_e)[:sample_num]
+            ## randomly choose sample_num ids from shuffled_ids without replacement
+            # check if the sample_num is larger than the remaining ids
+            if previous_id + sample_num > len(shuffled_e_ids):
+                shuffled_e_ids = tf.random.shuffle(self.node_id_e)
+                previous_id = tf.constant(0, dtype=tf.int32)
+            sample_ids = shuffled_e_ids[previous_id:previous_id+sample_num]
+            previous_id += sample_num
+
+            selected_spikes = tf.gather(spikes[sample_trial], sample_ids, axis=1)
+            selected_time = tf.tile(time, [1, sample_num])
+            selected_spikes = selected_time[selected_spikes]
+            fano = tf.cond(
+                tf.size(selected_spikes) > 0,
+                lambda: self.pop_fano_tf(selected_spikes, t_start=t_start, t_end=t_end, bin_edges=bin_edges, bin_sizes=bin_sizes),
+                lambda: tf.zeros_like(bin_sizes, dtype=self._dtype)  # Use zeros instead of NaNs to avoid unnecessary memory usage
+            )
+            fanos = fanos.write(i, fano)
+
+        fanos = fanos.stack()
+
+        # Calculate mean, standard deviation, and SEM of the Fano factors
+        fanos_mean = tf.reduce_mean(fanos, axis=0)
+        # Calculate MSE between the experimental and calculated Fano factors
+        mse_loss = tf.sqrt(tf.reduce_mean(tf.square(experimental_fanos_mean - fanos_mean)))
+        # Calculate the huber loss 
+        # huber_loss = self.huber_loss(experimental_fanos_mean, fanos_mean)
+        # Calculate the synchronization loss
+        sync_loss = self._sync_cost * mse_loss
+
+        return sync_loss
+    
+
+class SynchronizationRegularization(Layer):
     def __init__(self, sync_cost=10., target_sync=0.1, pre_delay=None, post_delay=None, data_dir='GLIF_network', 
                  area='v1', dtype=tf.float32, core_mask=None, **kwargs):
         super(SynchronizationLoss, self).__init__(dtype=dtype, **kwargs)
@@ -317,8 +473,9 @@ class SynchronizationLoss(Layer):
         self._dtype = dtype
 
     def compute_synchronization_proxy(self, spikes, bin_size_ms=20, time_resolution_ms=1):
-        num_time_points = tf.shape(spikes)[1]
-        num_neurons = tf.shape(spikes)[2]
+        spikes_shape = tf.shape(spikes)
+        num_time_points = spikes_shape[1]
+        num_neurons = spikes_shape[2]
         bin_size_points = bin_size_ms // time_resolution_ms
         num_bins = tf.math.floordiv(num_time_points, bin_size_points)
         # Just focus on the first batch
@@ -398,8 +555,8 @@ class SynchronizationLoss(Layer):
         # sync_proxy = self.compute_mean_pairwise_correlation(spikes)
         
         # Calculate the synchronization loss
-        # sync_loss = tf.abs(sync_proxy - self._target_sync)
-        sync_loss = self._sync_cost * sync_proxy
+        sync_loss = self._sync_cost * tf.abs(sync_proxy - self._target_sync)
+        # sync_loss = self._sync_cost * sync_proxy
 
         return sync_loss
 
