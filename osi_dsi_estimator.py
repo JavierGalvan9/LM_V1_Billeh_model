@@ -7,23 +7,20 @@ os.environ['TF_GPU_ALLOCATOR'] = 'cuda_malloc_async'
 
 import absl
 import numpy as np
-from matplotlib import pyplot as plt
 import tensorflow as tf
 import pickle as pkl
 from packaging import version
+from tensorflow.python.client import device_lib
 
 if version.parse(tf.__version__) < version.parse("2.4.0"):
     from tensorflow.keras.mixed_precision import experimental as mixed_precision
 else:
     from tensorflow.keras import mixed_precision
 
-from Model_utils import load_sparse, models, stim_dataset, toolkit, other_billeh_utils
-from Model_utils.plotting_utils import InputActivityFigure
-from Model_utils.model_metrics_analysis import ModelMetricsAnalysis
-from Model_utils.callbacks import OsiDsiCallbacks
+from Model_utils import load_sparse, models, stim_dataset, toolkit
+from Model_utils.callbacks import OsiDsiCallbacks, printgpu
 from time import time
 import ctypes.util
-
 
 
 print("--- CUDA version: ", tf.sysconfig.get_build_info()["cuda_version"])
@@ -36,15 +33,6 @@ print("--- CUDA Library path: ", lib_path)
 
 debug = False
 
-def printgpu(verbose=0):
-    if tf.config.list_physical_devices('GPU'):
-        meminfo = tf.config.experimental.get_memory_info('GPU:0')
-        current = meminfo['current'] / 1024**3
-        peak = meminfo['peak'] / 1024**3
-        if verbose == 0:
-            print(f"GPU memory use: {current:.2f} GB / Peak: {peak:.2f} GB")
-        if verbose == 1:
-            return current, peak
 
 def main(_):
     # Allow for memory growth (also to observe memory consumption)
@@ -95,7 +83,6 @@ def main(_):
         flag_str = logdir.split(os.path.sep)[-2]
         current_epoch = (flags.run_session + 1) * flags.n_epochs
         
-
     # Can be used to try half precision training
     if flags.float16:
         if version.parse(tf.__version__) < version.parse("2.4.0"):
@@ -114,8 +101,6 @@ def main(_):
     device = "/gpu:0" if tf.config.list_physical_devices("GPU") else "/cpu:0"
     # print(tf.config.list_physical_devices("GPU"))
     strategy = tf.distribute.OneDeviceStrategy(device=device)
-
-    from tensorflow.python.client import device_lib
 
     def get_available_devices():
         local_device_protos = device_lib.list_local_devices()
@@ -156,6 +141,7 @@ def main(_):
             dtype=tf.float32, 
             input_weight_scale=flags.input_weight_scale,
             interarea_weight_scale=1., 
+            recurrent_dampening_factor=flags.recurrent_dampening_factor,
             dampening_factor=flags.dampening_factor, 
             gauss_std=flags.gauss_std, 
             lr_scale=flags.lr_scale,
@@ -208,14 +194,10 @@ def main(_):
             checkpoint.restore(checkpoint_directory).expect_partial() #.assert_consumed()
             if flags.restore_from == "Best_model":
                 logdir = checkpoint_directory + "_results"
-                is_best_model = True
-            else:
-                is_best_model = False
             print('Checkpoint restored!')
             print(f'OSI/DSI results for epoch {current_epoch} will be saved in: {checkpoint_directory}\n')
         else:
             checkpoint = None # no restoration from any checkpoint
-            is_best_model = False
 
         model_variables_dict['Best'] =  {var.name: var.numpy().astype(np.float16) for var in model.trainable_variables}
         print(f"Model variables stored in dictionary\n")
@@ -236,7 +218,8 @@ def main(_):
 
         def roll_out(_x):
             _initial_state = tf.nest.map_structure(lambda _a: _a.read_value(), state_variables)
-            dummy_zeros = tf.zeros((flags.batch_size, flags.seq_len, n_total_neurons), dtype)
+            seq_len = tf.shape(_x)[1]
+            dummy_zeros = tf.zeros((flags.batch_size, seq_len, n_total_neurons), dtype)
             _out, _p, _ = extractor_model((_x, dummy_zeros, _initial_state))
 
             _v1_z, _lm_z = _out[0][0], _out[0][2]
@@ -244,12 +227,12 @@ def main(_):
             new_state = tuple(_out[1:])
             tf.nest.map_structure(lambda a, b: a.assign(b), state_variables, new_state)
 
-            return _v1_z, _lm_z
+            return _v1_z, _lm_z, new_state
 
         @tf.function
         def distributed_roll_out(x):
-            _v1_z, _lm_z = strategy.run(roll_out, args=(x,))
-            return _v1_z, _lm_z
+            _v1_z, _lm_z, new_state = strategy.run(roll_out, args=(x,))
+            return _v1_z, _lm_z, new_state
         
         # LGN firing rates to the different angles
         DG_angles = np.arange(0, 360, 45)
@@ -283,8 +266,9 @@ def main(_):
                 lgn_firing_rates_dict[angle] = lgn_firing_rates.numpy()
                 print(f'Angle {angle} done.')
                 print(f'    Trial running time: {time() - t0:.2f}s')
-                mem_data = printgpu(verbose=1)
-                print(f'    Memory consumption (current - peak): {mem_data[0]:.2f} GB - {mem_data[1]:.2f} GB\n')
+                for gpu_id in range(len(strategy.extended.worker_devices)):
+                    mem_data = printgpu(gpu_id=gpu_id, verbose=1)
+                    print(f'    Memory consumption (current - peak) GPU {gpu_id}: {mem_data[0]:.2f} GB - {mem_data[1]:.2f} GB')
 
             # Save the dataset      
             results_dir = os.path.join("OSI_DSI_dataset")
@@ -292,21 +276,73 @@ def main(_):
             with open(osi_dataset_path, 'wb') as f:
                 pkl.dump(lgn_firing_rates_dict, f)
             print('OSI/DSI dataset created successfully!')
-
         else:
             # Load the LGN firing rates dataset
             with open(osi_dataset_path, 'rb') as f:
                 lgn_firing_rates_dict = pkl.load(f)
 
+        # Define the dataset for the gray simulation
+        def get_gray_dataset_fn():
+            def _f(input_context):
+                _lgn_firing_rates = stim_dataset.generate_drifting_grating_tuning(
+                    seq_len=flags.seq_len,
+                    pre_delay=flags.seq_len,
+                    post_delay=0,
+                    n_input=flags.n_input,
+                    rotation=flags.rotation,
+                    billeh_phase=True,
+                    return_firing_rates=True,
+                ).batch(per_replica_batch_size)
+                            
+                return _lgn_firing_rates
+            return _f
+
+        # We define the dataset generates function under the strategy scope for a randomly selected orientation       
+        # test_data_set = strategy.distribute_datasets_from_function(get_dataset_fn(regular=True))   
+        gray_data_set = strategy.distribute_datasets_from_function(get_gray_dataset_fn())
+        gray_it = iter(gray_data_set)
+        spontaneous_lgn_firing_rates = next(iter(gray_data_set))   
+        spontaneous_lgn_firing_rates = tf.constant(spontaneous_lgn_firing_rates, dtype=dtype)
+        # load LGN spontaneous firing rates 
+        spontaneous_prob = 1 - tf.exp(-spontaneous_lgn_firing_rates / 1000.)
+        # Generate LGN spikes
+        x = tf.random.uniform(tf.shape(spontaneous_prob)) < spontaneous_prob
+        # Run a gray simulation to get the model state
+        tf.nest.map_structure(lambda a, b: a.assign(b), state_variables, zero_state)    
+        _, _, gray_state = distributed_roll_out(x)
+        del gray_data_set, gray_it, spontaneous_lgn_firing_rates, spontaneous_prob, x
+
+        def reset_state(reset_type='zero', new_state=None):
+            if reset_type == 'zero':
+                tf.nest.map_structure(lambda a, b: a.assign(b), state_variables, zero_state)
+            elif reset_type == 'gray':
+                # Run a gray simulation to get the model state
+                tf.nest.map_structure(lambda a, b: a.assign(b), state_variables, new_state)
+            elif reset_type == 'continue':
+                # Continue on the previous model state
+                # No action needed, as the state_variables will not be modified
+                pass
+            else:
+                raise ValueError(f"Invalid reset_type: {reset_type}")
+
+        @tf.function
+        def distributed_reset_state(reset_type, gray_state=None):
+            if reset_type == 'gray':
+                strategy.run(reset_state, args=(reset_type, gray_state))
+            else:
+                strategy.run(reset_state, args=(reset_type, zero_state))
+        
+        # Define the callbacks for the OSI/DSI analysis
         callbacks = OsiDsiCallbacks(networks, lgn_inputs, bkg_inputs, flags, logdir, current_epoch=current_epoch,
                                     pre_delay=500, post_delay=500, model_variables_init=model_variables_dict)
 
-        print('Starting to plot OSI and DSI...')
         sim_duration = (2500//flags.seq_len + 1) * flags.seq_len
-        v1_spikes = np.zeros((8, sim_duration, networks['v1']['n_nodes']), dtype=float)
-        lm_spikes = np.zeros((8, sim_duration, networks['lm']['n_nodes']), dtype=float)
+        # v1_spikes = np.zeros((8, sim_duration, networks['v1']['n_nodes']), dtype=float)
+        # lm_spikes = np.zeros((8, sim_duration, networks['lm']['n_nodes']), dtype=float)
+        v1_spikes = np.zeros((flags.n_trials_per_angle, 8, sim_duration, networks['v1']['n_nodes']), dtype=np.uint8)
+        lm_spikes = np.zeros((flags.n_trials_per_angle, 8, sim_duration, networks['lm']['n_nodes']), dtype=np.uint8)
 
-        for angle_id, angle in enumerate(range(0, 360, 45)):
+        for angle_id, angle in enumerate(DG_angles):
             # load LGN firign rates for the given angle and calculate spiking probability
             lgn_fr = lgn_firing_rates_dict[angle]
             lgn_fr = tf.constant(lgn_fr, dtype=tf.float32)
@@ -316,131 +352,39 @@ def main(_):
                 t0 = time()
                 # Reset the memory stats
                 # tf.config.experimental.reset_memory_stats('GPU:0')
+                # Reset the model state to gray state
+                distributed_reset_state('gray', gray_state=gray_state)
+
                 # Generate LGN spikes
                 x = tf.random.uniform(tf.shape(_p)) < _p
-
                 chunk_size = flags.seq_len
                 num_chunks = (2500//chunk_size + 1)
                 for i in range(num_chunks):
                     chunk = x[:, i * chunk_size : (i + 1) * chunk_size, :]
-                    v1_z_chunk, lm_z_chunk = distributed_roll_out(chunk)
-                    v1_spikes[angle_id, i * chunk_size : (i + 1) * chunk_size, :] += v1_z_chunk.numpy()[0, :, :].astype(float)
-                    lm_spikes[angle_id, i * chunk_size : (i + 1) * chunk_size, :] += lm_z_chunk.numpy()[0, :, :].astype(float)
+                    v1_z_chunk, lm_z_chunk, _ = distributed_roll_out(chunk)
+                    # v1_spikes[angle_id, i * chunk_size : (i + 1) * chunk_size, :] += v1_z_chunk.numpy()[0, :, :].astype(float)
+                    # lm_spikes[angle_id, i * chunk_size : (i + 1) * chunk_size, :] += lm_z_chunk.numpy()[0, :, :].astype(float)
+                    v1_spikes[trial_id, angle_id, i * chunk_size : (i + 1) * chunk_size, :] += v1_z_chunk.numpy()[0, :, :].astype(np.uint8)
+                    lm_spikes[trial_id, angle_id, i * chunk_size : (i + 1) * chunk_size, :] += lm_z_chunk.numpy()[0, :, :].astype(np.uint8)
                     
                 if trial_id == 0 and angle_id == 0:
                     # Raster plot for 0 degree orientation
-                    callbacks.single_trial_callbacks(x.numpy(), v1_spikes, lm_spikes, y=angle)
-                    # lgn_spikes = x[:, :2500, :].numpy()
-                    # z_v1 = v1_spikes[:, :2500, :]
-                    # z_lm = lm_spikes[:, :2500, :]
-                    # images_dir = os.path.join(logdir, 'Raster_plots_OSI_DSI', f'connected_areas_{flags.connected_areas}_conn_rec_{flags.connected_recurrent_connections}_conn_noise_{flags.connected_noise}')
-                    # os.makedirs(images_dir, exist_ok=True)
-                    # graph = InputActivityFigure(
-                    #                             networks,
-                    #                             flags.data_dir,
-                    #                             images_dir,
-                    #                             filename=f'Epoch_{current_epoch}_orientation_0_degrees',
-                    #                             frequency=flags.temporal_f,
-                    #                             stimuli_init_time=500,
-                    #                             stimuli_end_time=2500,
-                    #                             reverse=False,
-                    #                             plot_core_only=True,
-                    #                             )
-                    # graph(lgn_spikes, z_v1, z_lm)
-
+                    callbacks.single_trial_callbacks(x.numpy(), v1_spikes[0], lm_spikes[0], y=angle)
+       
                 print(f'Trial {trial_id+1}/{flags.n_trials_per_angle} - Angle {angle} done.')
                 print(f'    Trial running time: {time() - t0:.2f}s')
-                mem_data = printgpu(verbose=1)
-                # print(f'    Memory consumption (current - peak): {mem_data[0]:.2f} GB - {mem_data[1]:.2f} GB\n')
+                for gpu_id in range(len(strategy.extended.worker_devices)):
+                    mem_data = printgpu(gpu_id=gpu_id, verbose=1)
+                    print(f'    Memory consumption (current - peak) GPU {gpu_id}: {mem_data[0]:.2f} GB - {mem_data[1]:.2f} GB')
                 if not flags.calculate_osi_dsi:
                     break
 
+        # save lm spikes as a pkl file
+        # with open(os.path.join(logdir, 'lm_spikes.pkl'), 'wb') as f:
+        #     pkl.dump(lm_spikes, f)
+
         if flags.calculate_osi_dsi:
-            callbacks.osi_dsi_analysis(v1_spikes, lm_spikes, DG_angles, is_best_model=is_best_model)
-            # # Average the spikes over the number of trials
-            # v1_spikes = v1_spikes/flags.n_trials_per_angle
-            # v1_spikes = v1_spikes[:, :2500, :]
-            # lm_spikes = lm_spikes/flags.n_trials_per_angle
-            # lm_spikes = lm_spikes[:, :2500, :]
-            
-            # for spikes, area in zip([v1_spikes, lm_spikes], ['v1', 'lm']):
-            #     # Save the spikes
-            #     spikes_dir = os.path.join(logdir, 'Spikes_OSI_DSI', f'connected_areas_{flags.connected_areas}_conn_rec_{flags.connected_recurrent_connections}_conn_noise_{flags.connected_noise}')
-            #     os.makedirs(spikes_dir, exist_ok=True)
-
-            #     # Isolate the core neurons
-            #     n_core_neurons = 51978 if area == 'v1' else 7414 
-            #     core_mask = other_billeh_utils.isolate_core_neurons(networks[area], n_selected_neurons=n_core_neurons, data_dir=flags.data_dir)
-            #     spikes = spikes[:, :, core_mask]
-
-            #     tuning_angles = networks[area]['tuning_angle'][core_mask]
-                
-            #     for angle_id, angle in enumerate(range(0, 360, 45)):
-            #         firingRates = calculate_Firing_Rate(spikes[angle_id, :, :], drifting_gratings_init=500, drifting_gratings_end=2500)
-            #         x = tuning_angles
-            #         y = firingRates
-            #         # Define bins for delta_angle
-            #         bins = np.linspace(np.min(x), np.max(x), 50)
-            #         # Compute average rates for each bin
-            #         average_rates = []
-            #         for i in range(len(bins)-1):
-            #             mask = (x >= bins[i]) & (x < bins[i+1])
-            #             average_rates.append(np.mean(y[mask]))
-            #         # Create bar plot
-            #         plt.figure(figsize=(10, 6))
-            #         plt.bar(bins[:-1], average_rates, width=np.diff(bins))
-            #         plt.xlabel('Tuning Angle')
-            #         plt.ylabel('Average Rates')
-            #         plt.title(f'Gratings Angle: {angle}')
-            #         plt.savefig(os.path.join(spikes_dir, f'{area}_spikes_angle_{angle}.png'))
-
-            #     # Do the OSI/DSI analysis       
-            #     boxplots_dir = os.path.join(logdir, 'Boxplots_OSI_DSI')
-            #     os.makedirs(boxplots_dir, exist_ok=True)
-
-            #     fr_boxplots_dir = os.path.join(logdir, f'Boxplots_OSI_DSI/Ave_Rate(Hz)')
-            #     os.makedirs(fr_boxplots_dir, exist_ok=True)
-            #     fig1, axs1 = plt.subplots(2, 1, figsize=(12, 14))
-
-            #     spontaneous_boxplots_dir = os.path.join(logdir, 'Boxplots_OSI_DSI/Spontaneous rate (Hz)')
-            #     os.makedirs(spontaneous_boxplots_dir, exist_ok=True)
-            #     fig2, axs2 = plt.subplots(2, 1, figsize=(12, 14))
-
-            #     for axis_id, spikes, area in zip([0, 1], [v1_spikes, lm_spikes], ['v1', 'lm']):
-                    
-            #         metrics_analysis = ModelMetricsAnalysis(networks[area], data_dir=flags.data_dir,
-            #                                                 drifting_gratings_init=500, drifting_gratings_end=2500,
-            #                                                 area=area, analyze_core_only=True)
-            #         # Figure for OSI/DSI boxplots
-            #         metrics_analysis(spikes, DG_angles, metrics=["Rate at preferred direction (Hz)", "OSI", "DSI"], 
-            #                         directory=boxplots_dir, filename=f'Epoch_{current_epoch}', df_directory=logdir, save_df=is_best_model)
-            #         # Figure for Average firing rate boxplots
-            #         metrics_analysis(spikes, DG_angles, metrics=["Ave_Rate(Hz)"], axis=axs1[axis_id],
-            #                         directory=fr_boxplots_dir, filename=f'{area}_epoch_{current_epoch}', df_directory=logdir, save_df=is_best_model)   
-
-            #         # Spontaneous analysis:
-            #         spontaneous_metrics_analysis = ModelMetricsAnalysis(networks[area], data_dir=flags.data_dir,
-            #                                                             drifting_gratings_init=100, drifting_gratings_end=500,
-            #                                                             area=area, analyze_core_only=True)
-            #         spontaneous_metrics_analysis(spikes, DG_angles, metrics=['Spontaneous rate (Hz)'], axis=axs2[axis_id],
-            #                                     directory=spontaneous_boxplots_dir, filename=f'{area}_epoch_{current_epoch}', df_directory=logdir, save_df=is_best_model) 
-
-            #     fig1.tight_layout()
-            #     fig1.savefig(os.path.join(fr_boxplots_dir, f'epoch_{current_epoch}.png'), dpi=300, transparent=False)
-            #     fig2.tight_layout()
-            #     fig2.savefig(os.path.join(spontaneous_boxplots_dir, f'epoch_{current_epoch}.png'), dpi=300, transparent=False)
-            #     plt.close()  
-
-# def calculate_Firing_Rate(z, drifting_gratings_init=500, drifting_gratings_end=2500):
-#     dg_spikes = z[drifting_gratings_init:drifting_gratings_end, :]
-#     # if the number of dimensions of dg_spikes is 2, reshape it to 3 adding an additional first dimension
-#     # if dg_spikes.ndim == 2:
-#     #     dg_spikes = dg_spikes.reshape(1, dg_spikes.shape[0], dg_spikes.shape[1])
-#     # mean_dg_spikes = np.mean(dg_spikes, axis=0)
-#     mean_firing_rates = np.sum(dg_spikes, axis=0)/((drifting_gratings_end-drifting_gratings_init)/1000)
-    
-#     return mean_firing_rates
-
+            callbacks.osi_dsi_analysis(v1_spikes, lm_spikes, DG_angles)
 
 
 if __name__ == '__main__':
@@ -459,10 +403,11 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_float('learning_rate', .001, '')
     absl.app.flags.DEFINE_float('rate_cost', 100., '')
     absl.app.flags.DEFINE_float('voltage_cost', 1., '')
+    absl.app.flags.DEFINE_float('sync_cost', 1., '')
     absl.app.flags.DEFINE_float('osi_cost', 1., '')
-    absl.app.flags.DEFINE_string('osi_loss_method', 'crowd_spikes', '')
+    absl.app.flags.DEFINE_string('osi_loss_method', 'crowd_osi', '')
     absl.app.flags.DEFINE_float('osi_loss_subtraction_ratio', 1., '')
-    absl.app.flags.DEFINE_float('dampening_factor', .1, '')
+    absl.app.flags.DEFINE_float('dampening_factor', .5, '')
     absl.app.flags.DEFINE_float('recurrent_dampening_factor', .5, '')
     absl.app.flags.DEFINE_float('input_weight_scale', 1., '')
     absl.app.flags.DEFINE_float('gauss_std', .3, '')
@@ -479,7 +424,7 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_integer('n_epochs', 20, '')
     absl.app.flags.DEFINE_integer('batch_size', 1, '')
     absl.app.flags.DEFINE_integer('v1_neurons', 10, '')  # -1 to take all neurons
-    absl.app.flags.DEFINE_integer('lm_neurons', None, '')  # -1 to take all neurons
+    absl.app.flags.DEFINE_integer('lm_neurons', 10, '')  # -1 to take all neurons
     absl.app.flags.DEFINE_integer('steps_per_epoch', 10, '')# EA and garret dose not need this many but pure classification needs 781 = int(50000/64)
     absl.app.flags.DEFINE_integer('val_steps', 1, '')# EA and garret dose not need this many but pure classification needs 156 = int(10000/64)
     # number of LGN filters in visual space (input population)
@@ -498,11 +443,11 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_boolean('float16', False, '')
     absl.app.flags.DEFINE_boolean('caching', True, '')
     absl.app.flags.DEFINE_boolean('core_only', False, '')
-    absl.app.flags.DEFINE_boolean('core_loss', True, '')
+    absl.app.flags.DEFINE_boolean('core_loss', False, '')
     absl.app.flags.DEFINE_boolean('hard_reset', False, '')
     absl.app.flags.DEFINE_boolean('disconnect_lm_L6_inhibition', False, '')
     absl.app.flags.DEFINE_boolean('disconnect_v1_lm_L6_excitatory_projections', False, '')
-    absl.app.flags.DEFINE_boolean('realistic_neurons_ratio', True, '')
+    absl.app.flags.DEFINE_boolean('realistic_neurons_ratio', False, '')
     absl.app.flags.DEFINE_boolean('train_recurrent_v1', False, '')
     absl.app.flags.DEFINE_boolean('train_recurrent_lm', False, '')
     absl.app.flags.DEFINE_boolean('train_input', False, '')
