@@ -75,10 +75,21 @@ def pop_names(network, core_radius = None, n_selected_neurons=None, data_dir='GL
     return true_pop_names
 
 
-def angle_tunning(network, data_dir='GLIF_network'):
+def angle_tuning(network, core_radius = None, n_selected_neurons=None, data_dir='GLIF_network'):
     path_to_h5 = os.path.join(data_dir, 'network/v1_nodes.h5')
     node_h5 = h5py.File(path_to_h5, mode='r')
-    angle_tunning = np.array(node_h5['nodes']['v1']['0']['tuning_angle'][:])[network['tf_id_to_bmtk_id']]
+    angle_tuning = np.array(node_h5['nodes']['v1']['0']['tuning_angle'][:])[network['tf_id_to_bmtk_id']]
+    if core_radius is not None:
+        selected_mask = isolate_core_neurons(network, radius=core_radius, data_dir=data_dir)
+    elif n_selected_neurons is not None:
+        selected_mask = isolate_core_neurons(network, n_selected_neurons=n_selected_neurons, data_dir=data_dir)
+    else:
+        selected_mask = np.full(len(angle_tuning), True)
+
+    angle_tuning = angle_tuning[selected_mask]
+
+    return angle_tuning
+
 
     return angle_tunning
 
