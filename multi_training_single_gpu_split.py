@@ -461,17 +461,17 @@ def main(_):
         lm_voltage_loss = lm_voltage_regularizer(_lm_v) # trim is irrelevant for this
         voltage_loss = v1_voltage_loss + lm_voltage_loss
 
-        v1_recurrent_stiff_regularizer = v1_recurrent_regularizer(rsnn_layer.cell.v1.recurrent_weight_values)
-        lm_recurrent_stiff_regularizer = lm_recurrent_regularizer(rsnn_layer.cell.lm.recurrent_weight_values)
-        # v1_lm_weights_l2_regularizer = v1_lm_regularizer(rsnn_layer.cell.v1.interarea_weight_values['lm'])
-        # lm_v1_weights_l2_regularizer = lm_v1_regularizer(rsnn_layer.cell.lm.interarea_weight_values['v1'])
-        regularizers_loss = v1_recurrent_stiff_regularizer + lm_recurrent_stiff_regularizer # + v1_lm_weights_l2_regularizer + lm_v1_weights_l2_regularizer
-        
         if spontaneous:
             v1_rate_loss = v1_spont_rate_regularizer(_v1_z, trim) #+ v1_spont_rate_regularizer(_v1_z, trim, uniform_distribution_constraint=True)
             lm_rate_loss = lm_spont_rate_regularizer(_lm_z, trim) #+ lm_spont_rate_regularizer(_lm_z, trim, uniform_distribution_constraint=True)
             rate_loss = v1_rate_loss + lm_rate_loss
             osi_dsi_loss = tf.constant(0.0, dtype=dtype)
+            v1_recurrent_stiff_regularizer = v1_recurrent_regularizer(rsnn_layer.cell.v1.recurrent_weight_values)
+            lm_recurrent_stiff_regularizer = lm_recurrent_regularizer(rsnn_layer.cell.lm.recurrent_weight_values)
+            # v1_lm_weights_l2_regularizer = v1_lm_regularizer(rsnn_layer.cell.v1.interarea_weight_values['lm'])
+            # lm_v1_weights_l2_regularizer = lm_v1_regularizer(rsnn_layer.cell.lm.interarea_weight_values['v1'])
+            regularizers_loss = v1_recurrent_stiff_regularizer + lm_recurrent_stiff_regularizer # + v1_lm_weights_l2_regularizer + lm_v1_weights_l2_regularizer
+            
             v1_sync_loss = v1_spont_sync_loss(_v1_z, trim)
             lm_sync_loss = lm_spont_sync_loss(_lm_z, trim)
             sync_loss = v1_sync_loss + lm_sync_loss
@@ -485,6 +485,7 @@ def main(_):
             v1_osi_dsi_loss = v1_OSI_DSI_Loss(_v1_z, _y, trim, normalizer=v1_ema)
             lm_osi_dsi_loss = lm_OSI_DSI_Loss(_lm_z, _y, trim, normalizer=lm_ema)
             osi_dsi_loss = v1_osi_dsi_loss + lm_osi_dsi_loss
+            regularizers_loss = tf.constant(0.0, dtype=dtype)
             v1_sync_loss = v1_evoked_sync_loss(_v1_z, trim)
             lm_sync_loss = lm_evoked_sync_loss(_lm_z, trim)
             sync_loss = v1_sync_loss + lm_sync_loss
