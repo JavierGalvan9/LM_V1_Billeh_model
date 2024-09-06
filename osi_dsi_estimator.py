@@ -200,8 +200,7 @@ def main(_):
             checkpoint = None # no restoration from any checkpoint
 
         model_variables_dict['Best'] =  {var.name: var.numpy().astype(np.float16) for var in model.trainable_variables}
-        print(f"Model variables stored in dictionary\n")
-        print(model_variables_dict)
+        # print(f"Model variables stored in dictionary\n")
 
         # Build the model layers
         rsnn_layer = model.get_layer('rsnn')
