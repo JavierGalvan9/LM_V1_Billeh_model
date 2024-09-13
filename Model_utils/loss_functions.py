@@ -303,7 +303,7 @@ class SpikeRateDistributionTarget:
 
 
 class SynchronizationLoss(Layer):
-    def __init__(self, network, sync_cost=10., t_start=None, t_end=None, n_samples=50, data_dir='GLIF_network', 
+    def __init__(self, network, sync_cost=10., t_start=None, t_end=None, n_samples=50, data_dir='Synchronization_data', 
                  area='v1', session='evoked', dtype=tf.float32, core_mask=None, **kwargs):
         super(SynchronizationLoss, self).__init__(dtype=dtype, **kwargs)
         self._sync_cost = sync_cost
@@ -333,7 +333,7 @@ class SynchronizationLoss(Layer):
         self.epsilon = 1e-7  # Small constant to avoid division by zero
 
         # Load the experimental data
-        experimental_data_path = os.path.join(data_dir, f'all_fano_300ms_{session}.npy')
+        experimental_data_path = os.path.join(data_dir, f'Fano_factor_{self._area}', f'all_fano_300ms_{session}.npy')
         experimental_fanos = np.load(experimental_data_path, allow_pickle=True)
         # Calculate mean, standard deviation, and SEM of the Fano factors
         experimental_fanos_mean = np.nanmean(experimental_fanos, axis=0)
@@ -384,7 +384,13 @@ class SynchronizationLoss(Layer):
         n_trials = tf.shape(spikes)[0]
         sample_trials = tf.random.uniform([self._n_samples], minval=0, maxval=n_trials, dtype=tf.int32)
         # Generate sample counts with a normal distribution
-        sample_counts = tf.cast(tf.random.normal([self._n_samples], mean=68, stddev=10), tf.int32)
+        if self._area == 'v1':
+            sample_size = 68
+            sample_std = 10
+        else:
+            sample_size = 33
+            sample_std = 14
+        sample_counts = tf.cast(tf.random.normal([self._n_samples], mean=sample_size, stddev=sample_std), tf.int32)
         sample_counts = tf.clip_by_value(sample_counts, clip_value_min=1, clip_value_max=tf.shape(self.node_id_e)[0])
         # Randomize the neuron ids
         shuffled_e_ids = tf.random.shuffle(self.node_id_e)

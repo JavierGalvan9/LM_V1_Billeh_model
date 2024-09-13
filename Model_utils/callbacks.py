@@ -105,8 +105,9 @@ def pop_fano(spikes, bin_sizes):
         sp_counts = np.sum(trimmed_spikes, axis=1)
         # Calculate the mean of the spike counts
         mean_count = np.mean(sp_counts)
-        fano = np.where(mean_count > 0, np.var(sp_counts) / mean_count, 0)
-        fanos[i] = fano
+        if mean_count > 0:
+            # Calculate the Fano Factor
+            fanos[i] = np.var(sp_counts) / mean_count
                  
     return fanos
 
@@ -120,16 +121,20 @@ class OsiDsiCallbacks:
         self.bkg_inputs = bkg_inputs
         self.flags = flags
         self.logdir = logdir
+        if self.flags.connected_areas and self.flags.connected_recurrent_connections and self.flags.connected_noise:
+            self.images_dir = self.logdir
+        else:
+            self.images_dir = os.path.join(self.logdir, f'connected_areas_{self.flags.connected_areas}_conn_rec_{self.flags.connected_recurrent_connections}_conn_noise_{self.flags.connected_noise}')
         self.pre_delay = pre_delay
         self.post_delay = post_delay
         self.current_epoch = current_epoch
         self.model_variables_dict = model_variables_init
-        # Analize changes in trainable variables.
-        if self.model_variables_dict is not None:
-            for var in self.model_variables_dict['Best'].keys():
-                t0 = time()
-                self.trainable_variable_change_heatmaps_and_distributions(var)
-                print(f'Time spent in {var}: {time()-t0}')
+        # # Analize changes in trainable variables.
+        # if self.model_variables_dict is not None:
+        #     for var in self.model_variables_dict['Best'].keys():
+        #         t0 = time()
+        #         self.trainable_variable_change_heatmaps_and_distributions(var)
+        #         print(f'Time spent in {var}: {time()-t0}')
 
     def trainable_variable_change_heatmaps_and_distributions(self, variable):
         area = variable.split('_')[0]
@@ -191,7 +196,7 @@ class OsiDsiCallbacks:
         df = df.sort_values(['Post_names', 'Weight Type'])
 
         # Plotting
-        boxplots_dir = os.path.join(self.logdir, f'Boxplots/{variable}')
+        boxplots_dir = os.path.join(self.images_dir, f'Boxplots/{variable}')
         os.makedirs(boxplots_dir, exist_ok=True)
         # fig, axs = plt.subplots(2, 1, figsize=(12, 14))
         fig = plt.figure(figsize=(12, 6))
@@ -243,7 +248,7 @@ class OsiDsiCallbacks:
                             var_name='Weight Type', value_name='Weight')
         df_melted['Weight'] = np.abs(df_melted['Weight'])
         # Create directory for saving plots
-        boxplots_dir = os.path.join(self.logdir, f'Boxplots/{variable}_distribution')
+        boxplots_dir = os.path.join(self.images_dir, f'Boxplots/{variable}_distribution')
         os.makedirs(boxplots_dir, exist_ok=True)
         # Establish the order of the neuron types in the boxplots
         cell_type_order = np.sort(df['Pre_names'].unique())
@@ -354,11 +359,11 @@ class OsiDsiCallbacks:
         # global_min = df[['Initial weight', 'Final weight']].min().min()
         # global_max = df[['Initial weight', 'Final weight']].max().max()
 
-        boxplots_dir = os.path.join(self.logdir, f'Boxplots/{variable}')
+        boxplots_dir = os.path.join(self.images_dir, f'Boxplots/{variable}')
         os.makedirs(boxplots_dir, exist_ok=True)
 
         # Plot for Initial Weight
-        if not os.path.exists(os.path.join(self.logdir, 'Boxplots', variable, 'Initial_weight.png')):
+        if not os.path.exists(os.path.join(boxplots_dir, 'Initial_weight.png')):
             grouped_df = df.groupby(['Pre_names', 'Post_names'])['Initial weight'].mean().reset_index()
             # Create a pivot table to reshape the data for the heatmap
             pivot_df = grouped_df.pivot(index='Pre_names', columns='Post_names', values='Initial weight')
@@ -459,7 +464,13 @@ class OsiDsiCallbacks:
         bin_sizes_mask = bin_sizes < (t_end - t_start)/2
         bin_sizes = bin_sizes[bin_sizes_mask]
         # Vectorize the sampling process
-        sample_counts = np.random.normal(68, 10, n_samples).astype(int)
+        if area == 'v1':
+            sample_size = 68
+            sample_std = 10
+        else:
+            sample_size = 33
+            sample_std = 14
+        sample_counts = np.random.normal(sample_size, sample_std, n_samples).astype(int)
         # ensure that the sample counts are at least 1
         sample_counts = np.maximum(sample_counts, 1)
         # ensure that the sample counts are less than the number of neurons
@@ -475,16 +486,17 @@ class OsiDsiCallbacks:
             # selected_spikes = selected_spikes[~np.isnan(selected_spikes)]
             selected_spikes = new_spikes[random_trial_id][:, np.isin(node_id, sample_ids)]
             # if there are spikes use pop_fano
-            fano = pop_fano(selected_spikes, bin_sizes)
-            fanos.append(fano)
+            if np.sum(selected_spikes) > 0:
+                fano = pop_fano(selected_spikes, bin_sizes)
+                fanos.append(fano)
 
         fanos = np.array(fanos)
         return fanos, bin_sizes
         
-    def fanos_figure(self, spikes, area='', n_samples=100, analyze_core_only=True):
+    def fanos_figure(self, spikes, area='', n_samples=100, analyze_core_only=True, data_dir='Synchronization_data'):
         # Calculate fano factors for both sessions
         evoked_fanos, evoked_bin_sizes = self.fano_factor(spikes, area=area, t_start=0.7, t_end=2.5, n_samples=n_samples, analyze_core_only=analyze_core_only)
-        spontaneous_fanos, spont_bin_sizes = self.fano_factor(spikes, area=area, t_start=0, t_end=0.5, n_samples=n_samples, analyze_core_only=analyze_core_only)
+        spontaneous_fanos, spont_bin_sizes = self.fano_factor(spikes, area=area, t_start=0.2, t_end=0.5, n_samples=n_samples, analyze_core_only=analyze_core_only)
 
         # Calculate mean, standard deviation, and SEM of the Fano factors
         evoked_fanos_mean = np.nanmean(evoked_fanos, axis=0)
@@ -502,7 +514,8 @@ class OsiDsiCallbacks:
         spontaneous_max_fano_freq = 1/(2*spont_bin_sizes[np.nanargmax(spontaneous_fanos_mean)])
 
         # Calculate the evoked experimental error committed
-        evoked_exp_data_path = '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Synchronization_data/all_fano_300ms_evoked.npy'
+        # evoked_exp_data_path = '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Synchronization_data/all_fano_300ms_evoked.npy'
+        evoked_exp_data_path = os.path.join(data_dir, f'Fano_factor_{area}', f'all_fano_1800ms_evoked.npy')
         # load the experimental data
         evoked_exp_fanos = np.load(evoked_exp_data_path, allow_pickle=True)
         n_experimental_samples = evoked_exp_fanos.shape[0]
@@ -514,7 +527,8 @@ class OsiDsiCallbacks:
         evoked_exp_fanos_sem = evoked_exp_fanos_std / np.sqrt(n_experimental_samples)
 
         # Calculate the spontaneous experimental error committed
-        spont_exp_data_path = '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Synchronization_data/all_fano_300ms_spont.npy'
+        # spont_exp_data_path = '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Synchronization_data/all_fano_300ms_spont.npy'
+        spont_exp_data_path = os.path.join(data_dir, f'Fano_factor_{area}', f'all_fano_300ms_spont.npy')
         # load the experimental data
         spont_exp_fanos = np.load(spont_exp_data_path, allow_pickle=True)
         n_experimental_samples = spont_exp_fanos.shape[0]
@@ -544,8 +558,8 @@ class OsiDsiCallbacks:
         axs[1].legend(fontsize=14)
 
         plt.tight_layout()
-        os.makedirs(os.path.join(self.logdir, 'Fano_Factor'), exist_ok=True)
-        plt.savefig(os.path.join(self.logdir, 'Fano_Factor', f'{area}_epoch_{self.current_epoch}.png'), dpi=300, transparent=False)
+        os.makedirs(os.path.join(self.images_dir, 'Fano_Factor'), exist_ok=True)
+        plt.savefig(os.path.join(self.images_dir, 'Fano_Factor', f'{area}_epoch_{self.current_epoch}.png'), dpi=300, transparent=False)
         plt.close()
     
     def power_spectrum(self, v1_spikes, lm_spikes, v1_spikes_spont=None, lm_spikes_spont=None, fs=1000, directory=''):
@@ -611,12 +625,12 @@ class OsiDsiCallbacks:
             filename = f'{area}_Epoch_{self.current_epoch}'
             Population_activity = PopulationActivity(n_neurons=neurons, network=self.networks[area], 
                                                     stimuli_init_time=self.pre_delay, stimuli_end_time=seq_len-self.post_delay, 
-                                                    image_path=self.logdir, filename=filename, data_dir=self.flags.data_dir)
+                                                    image_path=self.images_dir, filename=filename, data_dir=self.flags.data_dir)
             Population_activity(z[area_id], area=area, plot_core_only=True, bin_size=10)
 
     def plot_raster(self, x, v1_spikes, lm_spikes, angle=0):
         seq_len = v1_spikes.shape[1]
-        images_dir = os.path.join(self.logdir, 'Raster_plots_OSI_DSI', f'connected_areas_{self.flags.connected_areas}_conn_rec_{self.flags.connected_recurrent_connections}_conn_noise_{self.flags.connected_noise}')
+        images_dir = os.path.join(self.images_dir, 'Raster_plots_OSI_DSI')
         os.makedirs(images_dir, exist_ok=True)
         graph = InputActivityFigure(
                                     self.networks,
@@ -633,7 +647,7 @@ class OsiDsiCallbacks:
 
     def plot_population_firing_rates_vs_tuning_angle(self, area, spikes, DG_angles):
         # Save the spikes
-        spikes_dir = os.path.join(self.logdir, 'Spikes_OSI_DSI', f'connected_areas_{self.flags.connected_areas}_conn_rec_{self.flags.connected_recurrent_connections}_conn_noise_{self.flags.connected_noise}')
+        spikes_dir = os.path.join(self.images_dir, 'Spikes_OSI_DSI')
         os.makedirs(spikes_dir, exist_ok=True)
 
         # Isolate the core neurons
@@ -674,7 +688,7 @@ class OsiDsiCallbacks:
         lm_evoked_spikes = lm_spikes[0, self.pre_delay:-self.post_delay, :].astype(np.float32)
         # Plot the power spectrum of the neuronal activity
         self.power_spectrum(v1_evoked_spikes, lm_evoked_spikes, v1_spikes_spont=v1_spont_spikes, lm_spikes_spont=lm_spont_spikes, 
-                            directory=os.path.join(self.logdir, 'Power_spectrum_OSI_DSI'))
+                            directory=os.path.join(self.images_dir, 'Power_spectrum_OSI_DSI'))
         # Plot the population activity
         self.plot_populations_activity(v1_spikes, lm_spikes)
         # Plot the raster plot
@@ -686,11 +700,11 @@ class OsiDsiCallbacks:
         # lm_spikes = np.sum(lm_spikes, axis=0).astype(np.float32)/self.flags.n_trials_per_angle
 
         # Do the OSI/DSI analysis       
-        boxplots_dir = os.path.join(self.logdir, 'Boxplots_OSI_DSI')
+        boxplots_dir = os.path.join(self.images_dir, 'Boxplots_OSI_DSI')
         os.makedirs(boxplots_dir, exist_ok=True)
-        fr_boxplots_dir = os.path.join(self.logdir, f'Boxplots_OSI_DSI/Ave_Rate(Hz)')
+        fr_boxplots_dir = os.path.join(self.images_dir, f'Boxplots_OSI_DSI/Ave_Rate(Hz)')
         os.makedirs(fr_boxplots_dir, exist_ok=True)
-        spontaneous_boxplots_dir = os.path.join(self.logdir, 'Boxplots_OSI_DSI/Spontaneous rate (Hz)')
+        spontaneous_boxplots_dir = os.path.join(self.images_dir, 'Boxplots_OSI_DSI/Spontaneous rate (Hz)')
         os.makedirs(spontaneous_boxplots_dir, exist_ok=True)
         # Define the figures
         fig1, axs1 = plt.subplots(2, 1, figsize=(12, 14))
@@ -706,7 +720,7 @@ class OsiDsiCallbacks:
             metrics_analysis = ModelMetricsAnalysis(spikes, DG_angles, self.networks[area], data_dir=self.flags.data_dir,
                                                     drifting_gratings_init=500, drifting_gratings_end=2500,
                                                     spontaneous_init=0, spontaneous_end=500,
-                                                    area=area, analyze_core_only=True, df_directory=self.logdir, save_df=True)
+                                                    area=area, analyze_core_only=True, df_directory=self.images_dir, save_df=True)
             # Figure for OSI/DSI boxplots
             metrics_analysis(metrics=["Rate at preferred direction (Hz)", "OSI", "DSI"], directory=boxplots_dir, filename=f'Epoch_{self.current_epoch}')
             # Figure for Average firing rate boxplots
