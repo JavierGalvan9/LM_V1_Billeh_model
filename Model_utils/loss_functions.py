@@ -333,7 +333,7 @@ class SynchronizationLoss(Layer):
         self.epsilon = 1e-7  # Small constant to avoid division by zero
 
         # Load the experimental data
-        experimental_data_path = os.path.join(data_dir, f'Fano_factor_{self._area}', f'all_fano_300ms_{session}.npy')
+        experimental_data_path = os.path.join(data_dir, f'Fano_factor_{self._area}', f'{self._area}_fano_running_300ms_{session}.npy')
         experimental_fanos = np.load(experimental_data_path, allow_pickle=True)
         # Calculate mean, standard deviation, and SEM of the Fano factors
         experimental_fanos_mean = np.nanmean(experimental_fanos, axis=0)
@@ -385,13 +385,13 @@ class SynchronizationLoss(Layer):
         sample_trials = tf.random.uniform([self._n_samples], minval=0, maxval=n_trials, dtype=tf.int32)
         # Generate sample counts with a normal distribution
         if self._area == 'v1':
-            sample_size = 68
-            sample_std = 10
+            sample_size = 70
+            sample_std = 30
         else:
             sample_size = 33
             sample_std = 14
         sample_counts = tf.cast(tf.random.normal([self._n_samples], mean=sample_size, stddev=sample_std), tf.int32)
-        sample_counts = tf.clip_by_value(sample_counts, clip_value_min=1, clip_value_max=tf.shape(self.node_id_e)[0])
+        sample_counts = tf.clip_by_value(sample_counts, clip_value_min=15, clip_value_max=tf.shape(self.node_id_e)[0]) # lower cap to 15 to avoid small samples
         # Randomize the neuron ids
         shuffled_e_ids = tf.random.shuffle(self.node_id_e)
         selected_spikes_sample = tf.TensorArray(self._dtype, size=self._n_samples)
