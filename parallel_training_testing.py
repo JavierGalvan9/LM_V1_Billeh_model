@@ -20,7 +20,7 @@ parser.add_argument('--results_dir', default='Simulation_results', type=str)
 parser.add_argument('--restore_from', default='', type=str)
 parser.add_argument('--interarea_weight_distribution', default='billeh_weights', type=str)
 # parser.add_argument('--interarea_weight_distribution', default='zero_weights', type=str)
-parser.add_argument('--delays', default='100,0', type=str)
+parser.add_argument('--delays', default='50,0', type=str)
 parser.add_argument('--optimizer', default='adam', type=str)
 
 parser.add_argument('--learning_rate', default=0.001, type=float)
@@ -142,8 +142,8 @@ def main():
     # Define the job submission commands for the training and evaluation scripts
     # training_commands = ["run", "-g", "1", "-m", "24", "-t", "1:15"]
     # evaluation_commands = ["run", "-g", "1", "-m", "65", "-t", "0:45"]
-    training_commands = ["run", "-g", "1", "-G", "L40S", "-m", "48", "-t", "1:45"] # choose the particular gpu model for training with 48 GB of memory
-    evaluation_commands = ["run", "-g", "1", "-m", "85", "-t", "2:30"]
+    training_commands = ["run", "-g", "1", "-G", "L40S", "-m", "24", "-t", "6:00"] # choose the particular gpu model for training with 48 GB of memory
+    evaluation_commands = ["run", "-g", "1", "-m", "70", "-t", "2:30"]
 
     # Define the training and evaluation script calls
     training_script = "python multi_training_single_gpu_split.py " 
@@ -193,10 +193,10 @@ def main():
             # new_first_training_script = first_training_script + f"--osi_cost 0 --recurrent_weight_regularization 0 --seed {flags.seed + i} --ckpt_dir {logdir} --run_session {i}"
             if initial_benchmark_model:
                 # new_first_training_script = first_training_script + f"--seed {flags.seed + i} --ckpt_dir {logdir} --run_session {i} --restore_from {initial_benchmark_model}"
-                new_first_training_script = training_script + f"--delays '0,0' --seq_len 500 --seed {flags.seed + i} --ckpt_dir {logdir} --run_session {i} --restore_from {initial_benchmark_model} "
+                new_first_training_script = training_script + f"--delays '50,0' --seq_len 500 --seed {flags.seed + i} --ckpt_dir {logdir} --run_session {i} --restore_from {initial_benchmark_model} "
             else:
                 # new_first_training_script = first_training_script + f"--seed {flags.seed + i} --ckpt_dir {logdir} --run_session {i}"
-                new_first_training_script = training_script + f"--delays '0,0' --seq_len 500 --seed {flags.seed + i} --ckpt_dir {logdir} --run_session {i}"
+                new_first_training_script = training_script + f"--delays '50,0' --seq_len 500 --seed {flags.seed + i} --ckpt_dir {logdir} --run_session {i}"
             new_first_training_command = new_training_command + [new_first_training_script]
             job_id = submit_job(new_first_training_command)
         else:
@@ -204,7 +204,7 @@ def main():
             # new_training_script = training_script + f"--train_noise --train_recurrent_v1 --train_recurrent_lm --train_interarea_v1_lm --seed {flags.seed + i} --ckpt_dir {logdir} --run_session {i}"
             # new_training_script = training_script + f"--delays '0,0' --seq_len 500 --seed {flags.seed + i} --ckpt_dir {logdir} --run_session {i}"
             # new_first_training_script = first_training_script + f"--seed {flags.seed + i} --ckpt_dir {logdir} --run_session {i}"
-            new_first_training_script = training_script + f"--delays '0,0' --seq_len 500 --seed {flags.seed + i} --ckpt_dir {logdir} --run_session {i}"
+            new_first_training_script = training_script + f"--delays '50,0' --seq_len 500 --seed {flags.seed + i} --ckpt_dir {logdir} --run_session {i}"
             new_training_command = new_training_command + [new_first_training_script]
             job_id = submit_job(new_training_command)
         job_ids.append(job_id)

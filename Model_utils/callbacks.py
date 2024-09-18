@@ -129,12 +129,12 @@ class OsiDsiCallbacks:
         self.post_delay = post_delay
         self.current_epoch = current_epoch
         self.model_variables_dict = model_variables_init
-        # # Analize changes in trainable variables.
-        # if self.model_variables_dict is not None:
-        #     for var in self.model_variables_dict['Best'].keys():
-        #         t0 = time()
-        #         self.trainable_variable_change_heatmaps_and_distributions(var)
-        #         print(f'Time spent in {var}: {time()-t0}')
+        # Analize changes in trainable variables.
+        if self.model_variables_dict is not None:
+            for var in self.model_variables_dict['Best'].keys():
+                t0 = time()
+                self.trainable_variable_change_heatmaps_and_distributions(var)
+                print(f'Time spent in {var}: {time()-t0}')
 
     def trainable_variable_change_heatmaps_and_distributions(self, variable):
         area = variable.split('_')[0]
@@ -465,14 +465,14 @@ class OsiDsiCallbacks:
         bin_sizes = bin_sizes[bin_sizes_mask]
         # Vectorize the sampling process
         if area == 'v1':
-            sample_size = 68
-            sample_std = 10
+            sample_size = 70
+            sample_std = 30
         else:
             sample_size = 33
             sample_std = 14
         sample_counts = np.random.normal(sample_size, sample_std, n_samples).astype(int)
-        # ensure that the sample counts are at least 1
-        sample_counts = np.maximum(sample_counts, 1)
+        # ensure that the sample counts are at least 15
+        sample_counts = np.maximum(sample_counts, 15)
         # ensure that the sample counts are less than the number of neurons
         sample_counts = np.minimum(sample_counts, len(node_id_e))
         # trial_ids =np.random.choice(np.arange(n_trials), n_samples, replace=False)
@@ -515,7 +515,7 @@ class OsiDsiCallbacks:
 
         # Calculate the evoked experimental error committed
         # evoked_exp_data_path = '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Synchronization_data/all_fano_300ms_evoked.npy'
-        evoked_exp_data_path = os.path.join(data_dir, f'Fano_factor_{area}', f'all_fano_1800ms_evoked.npy')
+        evoked_exp_data_path = os.path.join(data_dir, f'Fano_factor_{area}', f'{area}_fano_running_1800ms_evoked.npy')
         # load the experimental data
         evoked_exp_fanos = np.load(evoked_exp_data_path, allow_pickle=True)
         n_experimental_samples = evoked_exp_fanos.shape[0]
@@ -528,7 +528,7 @@ class OsiDsiCallbacks:
 
         # Calculate the spontaneous experimental error committed
         # spont_exp_data_path = '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Synchronization_data/all_fano_300ms_spont.npy'
-        spont_exp_data_path = os.path.join(data_dir, f'Fano_factor_{area}', f'all_fano_300ms_spont.npy')
+        spont_exp_data_path = os.path.join(data_dir, f'Fano_factor_{area}', f'{area}_fano_running_300ms_spont.npy')
         # load the experimental data
         spont_exp_fanos = np.load(spont_exp_data_path, allow_pickle=True)
         n_experimental_samples = spont_exp_fanos.shape[0]
