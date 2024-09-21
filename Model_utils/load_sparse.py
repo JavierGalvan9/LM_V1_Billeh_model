@@ -70,8 +70,8 @@ def load_network(path="GLIF_network/v1_network_dat.pkl",
         r = np.sqrt(x**2 + z**2)  # the maximum radius is 845
 
     ### CHOOSE THE NETWORK NODES ###
-    if n_neurons > 230924:
-        raise ValueError("There are only 230924 neurons in the network")
+    if n_neurons > n_nodes:
+        raise ValueError(f"There are only {n_nodes} neurons in the network")
     
     # sel is a boolean array with True value in the indices of selected neurons
     elif connected_selection:  # this condition takes the n_neurons closest neurons
@@ -102,7 +102,7 @@ def load_network(path="GLIF_network/v1_network_dat.pkl",
             sel[take_inds] = True
 
     # Choose n_neurons random neurons without any other requirement
-    elif n_neurons > 0 and n_neurons <= 230924:  # this condition takes random neurons from all the v1
+    elif n_neurons > 0 and n_neurons <= n_nodes:  # this condition takes random neurons from all the v1
         legit_neurons = np.arange(n_nodes)
         take_inds = rd.choice(legit_neurons, size=n_neurons, replace=False)
         sel = np.empty(n_nodes, dtype=np.bool_)
