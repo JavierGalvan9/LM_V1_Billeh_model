@@ -19,7 +19,6 @@ from general_utils import file_management
 from time import time
 import ctypes.util
 
-
 # Define the environment variables for optimal GPU performance
 # os.environ['TF_GPU_THREAD_MODE'] = 'gpu_private'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
@@ -120,12 +119,12 @@ def main(_):
             train_noise=flags.train_noise,
             batch_size=flags.batch_size, 
             pseudo_gauss=flags.pseudo_gauss, 
-            use_state_input=True, 
-            return_state=True,
+            use_state_input= True, 
+            return_state= True,
             hard_reset=flags.hard_reset,
-            add_rate_metric=True, 
+            add_rate_metric= True, 
             max_delay=5, 
-            connected_areas=False,
+            connected_areas= False,
             # output_completed_valid_from_time=120, 
             # output_abstract_valid_from_time=100,
             )
@@ -200,7 +199,7 @@ def main(_):
                         cpd = 0.04,
                         contrast = 1,
                         moving_flag = True, 
-                        inverse = True
+                        inverse = False
                     ).batch(1)
                                 
                     return _data_set
@@ -269,8 +268,8 @@ def main(_):
 if __name__ == '__main__':
 
     # Define the directory to save the results
-    _results_dir = 'receptive_field_analysis'
-    _checkpoint_dir = 'Benchmark_models/v1_100000_lm_30000'
+    _results_dir = 'receptive_field_new_model'
+    _checkpoint_dir = 'Benchmark_models/v1_90000_lm_30000'
 
     # Define particular task flags
     absl.app.flags.DEFINE_string('results_dir', _results_dir, '')

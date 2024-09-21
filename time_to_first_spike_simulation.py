@@ -125,7 +125,7 @@ def main(_):
             hard_reset=flags.hard_reset,
             add_rate_metric=True, 
             max_delay=5, 
-            connected_areas=True # connected areas!
+            connected_areas=False # connected areas!
             # output_completed_valid_from_time=120, 
             # output_abstract_valid_from_time=100,
             )
@@ -192,7 +192,7 @@ def main(_):
                     regular=regular,
                     temporal_f = 0,
                     cpd = 0,
-                    contrast = -1, # -1 --> black flash, 1 --> white flash
+                    contrast = 1, # -1 --> black flash, 1 --> white flash
                     phase = 90, 
                     moving_flag = False
                 ).batch(1)
@@ -255,8 +255,8 @@ def main(_):
 if __name__ == '__main__':
 
     # Define the directory to save the results
-    _results_dir = 'Time_to_first_spike_analysis'
-    _checkpoint_dir = 'Benchmark_models/v1_100000_lm_30000'
+    _results_dir = 'Time_to_first_spike_new_model'
+    _checkpoint_dir = 'Benchmark_models/v1_90000_lm_30000'
 
     # Define particular task flags
     absl.app.flags.DEFINE_string('results_dir', _results_dir, '')
