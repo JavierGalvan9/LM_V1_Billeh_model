@@ -7,10 +7,8 @@ Created on Thu Dec  8 17:28:39 2022
 
 import os
 import sys
-import absl
 import pandas as pd
 import numpy as np
-import math
 import tensorflow as tf
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -18,9 +16,7 @@ import seaborn as sns
 from matplotlib.patches import Rectangle
 sys.path.append(os.path.join(os.getcwd(), "Model_utils"))
 import other_billeh_utils
-import load_sparse
 from scipy.stats import ks_2samp
-
 
 mpl.style.use('default')
 # rd = np.random.RandomState(seed=42)
@@ -36,7 +32,8 @@ def calculate_Firing_Rate(z, drifting_gratings_init=500, drifting_gratings_end=2
     
     return mean_firing_rates
 
-def calculate_OSI_DSI(rates_df, network, DG_angles=range(0,360, 45), n_selected_neurons=None, remove_zero_rate_neurons=False):
+def calculate_OSI_DSI(rates_df, network, session='drifting_gratings', DG_angles=range(0,360, 45), 
+                      n_selected_neurons=None, remove_zero_rate_neurons=False, area='v1', directory=''):
     
     # Get the pop names of the neurons
     if n_selected_neurons is not None:
@@ -48,43 +45,50 @@ def calculate_OSI_DSI(rates_df, network, DG_angles=range(0,360, 45), n_selected_
     n_neurons = len(pop_names)
     node_ids = np.arange(n_neurons)
 
-    # save all rates with pickle
-    # rates_df.to_pickle('rates_df.pkl')
+    # Save the results in a dataframe
+    if os.path.exists(os.path.join(directory, f"{area}_features_df.csv")):
+        osi_dsi_df = pd.read_csv(os.path.join(directory, f"{area}_features_df.csv"), sep=" ")
+    else:
+        osi_dsi_df = pd.DataFrame()
+        osi_dsi_df["node_id"] = node_ids
+        osi_dsi_df["pop_name"] = pop_names
     
     # Get the firing rates for every neuron and DG angle
     all_rates = np.array([g["Ave_Rate(Hz)"] for _, g in rates_df.groupby("DG_angle")]).T
     average_rates = np.mean(all_rates, axis=1)
 
-    # Find the preferred DG angle for each neuron
-    preferred_angle_ind = np.argmax(all_rates, axis=1)
-    preferred_rates = np.max(all_rates, axis=1)
-    preferred_DG_angle = np.array(DG_angles)[preferred_angle_ind]
+    if session == 'drifting_gratings':
+         # Find the preferred DG angle for each neuron
+        preferred_angle_ind = np.argmax(all_rates, axis=1)
+        preferred_rates = np.max(all_rates, axis=1)
+        preferred_DG_angle = np.array(DG_angles)[preferred_angle_ind]
 
-    # Calculate the DSI and OSI
-    phase_rad = np.array(DG_angles) * np.pi / 180.0
-    denominator = all_rates.sum(axis=1)
-    dsi = np.where(denominator != 0, 
-               np.abs((all_rates * np.exp(1j * phase_rad)).sum(axis=1)) / denominator, 
-               np.nan)
-    osi = np.where(denominator != 0,
-                np.abs((all_rates * np.exp(2j * phase_rad)).sum(axis=1)) / denominator,
+        # Calculate the DSI and OSI
+        phase_rad = np.array(DG_angles) * np.pi / 180.0
+        denominator = all_rates.sum(axis=1)
+        dsi = np.where(denominator != 0, 
+                np.abs((all_rates * np.exp(1j * phase_rad)).sum(axis=1)) / denominator, 
                 np.nan)
+        osi = np.where(denominator != 0,
+                    np.abs((all_rates * np.exp(2j * phase_rad)).sum(axis=1)) / denominator,
+                    np.nan)
+        
+        osi_dsi_df['Ave_Rate(Hz)'] = average_rates
+        osi_dsi_df["max_mean_rate(Hz)"] = preferred_rates
+        osi_dsi_df["preferred_angle"] = preferred_DG_angle
+        osi_dsi_df['OSI'] = osi
+        osi_dsi_df['DSI'] = dsi
 
-    # Save the results in a dataframe
-    osi_df = pd.DataFrame()
-    osi_df["node_id"] = node_ids
-    osi_df["pop_name"] = pop_names
-    osi_df["DSI"] = dsi
-    osi_df["OSI"] = osi
-    osi_df["preferred_angle"] = preferred_DG_angle
-    osi_df["max_mean_rate(Hz)"] = preferred_rates
-    osi_df["Ave_Rate(Hz)"] = average_rates
-    osi_df['firing_rate_sp'] = average_rates
+    elif session == 'spontaneous':
+        osi_dsi_df['firing_rate_sp'] = average_rates
 
     if remove_zero_rate_neurons:
-        osi_df = osi_df[osi_df["Ave_Rate(Hz)"] != 0]
+        if session == 'drifting_gratings':
+            osi_dsi_df = osi_dsi_df[osi_dsi_df["Ave_Rate(Hz)"] != 0]
+        elif session == 'spontaneous':
+            osi_dsi_df = osi_dsi_df[osi_dsi_df["firing_rate_sp"] != 0] 
 
-    return osi_df
+    return osi_dsi_df
 
 
 def compute_ks_statistics(df, metric='Ave_Rate(Hz)', min_n_sample=15):
@@ -136,7 +140,7 @@ class ModelMetricsAnalysis:
         self.analyze_core_only = analyze_core_only
         
     def __call__(self, spikes, DG_angles, metrics=["Rate at preferred direction (Hz)", "OSI", "DSI"], axis=None, 
-                 directory='', filename=''):
+                 directory='', filename='', df_directory='', save_df=True):
         
         directory = os.path.join(directory, f'{self.area}')
 
@@ -186,7 +190,7 @@ class ModelMetricsAnalysis:
         # # Calculate approximation to OSIs and DSIs
         # osi_approx_df = self.calculate_osi_approximation(firing_rates_df)
         # osi_approx_normalized_df = self.calculate_osi_approximation(firing_rates_df, normalized=True)
-        osi_approx_real_df = self.calculate_osi_approximation(firing_rates_df, normalized=True, real_part_only=True)
+        # osi_approx_real_df = self.calculate_osi_approximation(firing_rates_df, normalized=True, real_part_only=True)
         # print(osi_approx_real_df)
 
         # create a copy
@@ -203,9 +207,15 @@ class ModelMetricsAnalysis:
         # # print(quadratic_difference)
         
         # Calculate the orientation and direction selectivity indices
-        metrics_df = calculate_OSI_DSI(firing_rates_df, self.network, DG_angles=DG_angles, n_selected_neurons=n_neurons_plot,
-                                    remove_zero_rate_neurons=False)
-        # metrics_df.to_csv(os.path.join(self.directory, f"V1_OSI_DSI_DF.csv"), sep=" ", index=False)        
+        if 'Spontaneous rate (Hz)' in metrics:
+            session = 'spontaneous'
+        else:
+            session = 'drifting_gratings'
+        metrics_df = calculate_OSI_DSI(firing_rates_df, self.network, session=session, DG_angles=DG_angles, n_selected_neurons=n_neurons_plot,
+                                    remove_zero_rate_neurons=False, area=self.area, directory=df_directory)
+        if save_df:
+            os.makedirs(df_directory, exist_ok=True)
+            metrics_df.to_csv(os.path.join(df_directory, f"{self.area}_features_df.csv"), sep=" ", index=False)   
 
         boxplot = MetricsBoxplot(area=self.area, save_dir=directory, filename=filename)
         # boxplot.plot(metrics=metrics, metrics_df=metrics_df, additional_dfs=[osi_approx_real_df], additional_dfs_labels=['Approximation'], axis=axis)
@@ -343,18 +353,17 @@ class ModelMetricsAnalysis:
         """
         # Load data
         neuropixels_data_path = f'Neuropixels_data/{self.area}_OSI_DSI_DF.csv'
-        np_df = pd.read_csv(neuropixels_data_path, index_col=0, sep=" ")
-
-        osi_df = np_df[['cell_type', 'OSI', 'DSI', "Ave_Rate(Hz)", "max_mean_rate(Hz)"]]
-        nonresponding = osi_df["max_mean_rate(Hz)"] < 0.5
-        osi_df.loc[nonresponding, "OSI"] = np.nan
-        osi_df.loc[nonresponding, "DSI"] = np.nan
-        osi_df = osi_df[osi_df["Ave_Rate(Hz)"] != 0]
-        osi_df.dropna(inplace=True)
-        osi_df["cell_type"] = osi_df["cell_type"].apply(self.neuropixels_cell_type_to_cell_type)
-        osi_target = osi_df.groupby("cell_type")['OSI'].mean()
-        # dsi_target = osi_df.groupby("cell_type")['DSI'].mean()
-        # osi_target = osi_df.groupby("cell_type")['OSI'].median()
+        features_to_load = ['ecephys_unit_id', 'cell_type', 'OSI', 'DSI', "Ave_Rate(Hz)", "max_mean_rate(Hz)"]
+        osi_dsi_df = pd.read_csv(neuropixels_data_path, index_col=0, sep=" ", usecols=features_to_load).dropna(how='all')
+        nonresponding = osi_dsi_df["max_mean_rate(Hz)"] < 0.5
+        osi_dsi_df.loc[nonresponding, "OSI"] = np.nan
+        osi_dsi_df.loc[nonresponding, "DSI"] = np.nan
+        osi_dsi_df = osi_dsi_df[osi_dsi_df["Ave_Rate(Hz)"] != 0]
+        osi_dsi_df.dropna(inplace=True)
+        osi_dsi_df["cell_type"] = osi_dsi_df["cell_type"].apply(self.neuropixels_cell_type_to_cell_type)
+        osi_target = osi_dsi_df.groupby("cell_type")['OSI'].mean()
+        # dsi_target = osi_dsi_df.groupby("cell_type")['DSI'].mean()
+        # osi_target = osi_dsi_df.groupby("cell_type")['OSI'].median()
 
         return osi_target
 
@@ -364,7 +373,7 @@ class MetricsBoxplot:
         self.area = area
         self.save_dir = save_dir
         self.filename = filename
-        self.osi_dfs = []
+        self.osi_dsi_dfs = []
 
     @staticmethod
     def pop_name_to_cell_type(pop_name):
@@ -428,36 +437,38 @@ class MetricsBoxplot:
             )
         return ax   
 
-    def get_osi_dsi_df(self, metric_file="v1_OSI_DSI_DF.csv", data_source_name="", feature='', data_dir=""):
+    def get_osi_dsi_df(self, metric_file, data_source_name="", feature='', data_dir=""):
         # Load the data csv file and remove rows with empty cell type
-        # if metric_file is a dataframe, then do not load it
-        if isinstance(metric_file, pd.DataFrame):
-            df = metric_file
-        else:
-            df = pd.read_csv(f"{data_dir}/{metric_file}", sep=" ")
-
         # Rename the cell types
         if data_dir == "Neuropixels_data":
+            features_to_load = ['ecephys_unit_id', 'cell_type', 'firing_rate_sp', 'Ave_Rate(Hz)', "max_mean_rate(Hz)", "OSI", "DSI"]
+            df = pd.read_csv(f"{data_dir}/{metric_file}", index_col=0, sep=" ", usecols=features_to_load).dropna(how='all')
             df = df[df['cell_type'].notna()]
             df["cell_type"] = df["cell_type"].apply(self.neuropixels_cell_type_to_cell_type)
         elif data_dir == 'Billeh_column_metrics':
+            df = pd.read_csv(f"{data_dir}/{metric_file}", sep=" ")
             df["cell_type"] = df["pop_name"].apply(self.pop_name_to_cell_type)
         elif data_dir == "NEST_metrics":
+            df = pd.read_csv(f"{data_dir}/{metric_file}", sep=" ")
             df["cell_type"] = df["pop_name"].apply(self.pop_name_to_cell_type)
             # plot only neurons within 200 um.
             df = df[(df["x"] ** 2 + df["z"] ** 2) < (200 ** 2)]
-        else:
+        elif isinstance(metric_file, pd.DataFrame):
+            df = metric_file
             df["cell_type"] = df["pop_name"].apply(self.pop_name_to_cell_type)
 
         # Rename the maximum rate column
-        df.rename(columns={"max_mean_rate(Hz)": "Rate at preferred direction (Hz)"}, inplace=True)
-        df.rename(columns={"firing_rate_sp": "Spontaneous rate (Hz)"}, inplace=True)
+        if 'max_mean_rate(Hz)' in df.columns:
+            df.rename(columns={"max_mean_rate(Hz)": "Rate at preferred direction (Hz)"}, inplace=True)
+        if 'firing_rate_sp' in df.columns:
+            df.rename(columns={"firing_rate_sp": "Spontaneous rate (Hz)"}, inplace=True)
         # df.rename(columns={"Ave_Rate(Hz)": "Average rate (Hz)"}, inplace=True)
 
         # Cut off neurons with low firing rate at the preferred direction
-        nonresponding = df["Rate at preferred direction (Hz)"] < 0.5
-        df.loc[nonresponding, "OSI"] = np.nan
-        df.loc[nonresponding, "DSI"] = np.nan
+        if 'Rate at preferred direction (Hz)' in df.columns:
+            nonresponding = df["Rate at preferred direction (Hz)"] < 0.5
+            df.loc[nonresponding, "OSI"] = np.nan
+            df.loc[nonresponding, "DSI"] = np.nan
 
         # Sort the neurons by neuron types
         df = df.sort_values(by="cell_type")
@@ -469,6 +480,11 @@ class MetricsBoxplot:
             df["data_type"] = data_dir
 
         columns = ["cell_type", "data_type", "Rate at preferred direction (Hz)", "OSI", "DSI", 'Ave_Rate(Hz)', 'Spontaneous rate (Hz)']
+        # Ensure all required columns exist in the DataFrame, fill with NaN if not present
+        for col in columns:
+            if col not in df.columns:
+                df[col] = np.nan
+
         df = df[columns]
 
         return df
@@ -478,16 +494,16 @@ class MetricsBoxplot:
         if metrics_df is None:
             metrics_df = f"{self.area}_OSI_DSI_DF.csv"
 
-        self.osi_dfs.append(self.get_osi_dsi_df(metric_file=metrics_df, data_source_name="V1/LM GLIF model", data_dir=self.save_dir))
-        self.osi_dfs.append(self.get_osi_dsi_df(metric_file=f"{self.area}_OSI_DSI_DF.csv", data_source_name="Neuropixels", data_dir='Neuropixels_data'))
+        self.osi_dsi_dfs.append(self.get_osi_dsi_df(metrics_df, data_source_name="V1/LM GLIF model", data_dir=self.save_dir))
+        self.osi_dsi_dfs.append(self.get_osi_dsi_df(f"{self.area}_OSI_DSI_DF.csv", data_source_name="Neuropixels", data_dir='Neuropixels_data'))
         # if self.area == 'v1':
-        #     self.osi_dfs.append(self.get_osi_dsi_df(metric_file=f"v1_OSI_DSI_DF.csv", data_source_name="Billeh et al (2020)", data_dir='Billeh_column_metrics'))
-            # self.osi_dfs.append(self.get_osi_dsi_df(metric_file=f"{self.area}_OSI_DSI_DF_pop_name.csv", data_source_name="NEST simulation", data_dir='NEST_metrics'))
+        #     self.osi_dsi_dfs.append(self.get_osi_dsi_df(f"v1_OSI_DSI_DF.csv", data_source_name="Billeh et al (2020)", data_dir='Billeh_column_metrics'))
+            # self.osi_dsi_dfs.append(self.get_osi_dsi_df(f"{self.area}_OSI_DSI_DF_pop_name.csv", data_source_name="NEST simulation", data_dir='NEST_metrics'))
         if additional_dfs:
             for i, df in enumerate(additional_dfs):
-                self.osi_dfs.append(self.get_osi_dsi_df(metric_file=df, data_source_name=additional_dfs_labels[i], data_dir='Additional_data'))
+                self.osi_dsi_dfs.append(self.get_osi_dsi_df(df, data_source_name=additional_dfs_labels[i], data_dir='Additional_data'))
         
-        df = pd.concat(self.osi_dfs, ignore_index=True)
+        df = pd.concat(self.osi_dsi_dfs, ignore_index=True)
         # df.to_csv(f"help_DG_firing_rates_df.csv", sep=" ", index=False)
 
         # Create a figure to compare several model metrics against Neuropixels data
@@ -741,7 +757,7 @@ class OneShotTuningAnalysis:
         plt.savefig(os.path.join(path, f'epoch_{epoch}.png'), dpi=300, transparent=False)
         plt.close()
 
-    def plot_max_rate_boxplots(self, epoch, remove_zero_rate_neurons=True, axis=None):
+    def plot_max_rate_boxplots(self, epoch, remove_zero_rate_neurons=False, axis=None):
         # Create a DataFrame to store firing rates, preferred angles, and cell types.
         firing_rates_df = pd.DataFrame({'pop_name': self.pop_names, 'Rate at preferred direction (Hz)': np.full(len(self.firing_rate), np.nan)})
         circular_diff = (self.tuning_angles - self.current_orientation) % 360
@@ -774,32 +790,3 @@ class OneShotTuningAnalysis:
         metrics = ["Rate at preferred direction (Hz)"]
         boxplot.plot(metrics=metrics, metrics_df=firing_rates_df, axis=axis)
 
-
-# def main(_):
-#     flags = absl.app.flags.FLAGS    
-#     model_analysis = ModelMetricsAnalysis(flags)
-#     model_analysis('v1')
-#     model_analysis('lm')
-    
-# if __name__ == '__main__':
-    
-#     absl.app.flags.DEFINE_integer('v1_neurons', 230924, '')
-#     absl.app.flags.DEFINE_integer('lm_neurons', 32940, '')
-#     absl.app.flags.DEFINE_integer('gratings_frequency', 2, '')
-#     absl.app.flags.DEFINE_integer('n_simulations', None, '')
-#     absl.app.flags.DEFINE_integer('seed', 3000, '')
-#     absl.app.flags.DEFINE_boolean('skip_first_simulation', False, '')
-#     absl.app.flags.DEFINE_boolean('connected_selection', True, '')
-#     absl.app.flags.DEFINE_boolean('caching', True, '')
-#     absl.app.flags.DEFINE_boolean('core_only', False, '')
-#     absl.app.flags.DEFINE_boolean('hard_reset', False, '')
-#     absl.app.flags.DEFINE_string('interarea_weight_distribution', 'billeh_like', '')
-#     absl.app.flags.DEFINE_boolean('analyze_core_only', True, '')
-#     absl.app.flags.DEFINE_float('E4_weight_factor', 1., '')
-#     absl.app.flags.DEFINE_boolean('disconnect_lm_L6_inhibition', False, '')
-#     absl.app.flags.DEFINE_integer('n_input', 17400, '')
-#     absl.app.flags.DEFINE_integer('seq_len', 3000, '')
-#     absl.app.flags.DEFINE_string('data_dir', 'GLIF_network', '')
-    
-    
-#     absl.app.run(main)  

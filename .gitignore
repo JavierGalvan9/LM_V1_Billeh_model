@@ -40,3 +40,7 @@ receptive_field_new_model/size_tuning_disconnected_classical
 receptive_field_new_model/size_tuning_connected_inverse
 receptive_field_new_model/size_tuning_disconnected_inverse
 
+multi_training_distributed.py
+v1_lm_spikes.pkl
+Borrar/Populations activity/prueba.png
+Neuropixels_platform_paper/data/sub-703279277_ses-719161530.nwb
