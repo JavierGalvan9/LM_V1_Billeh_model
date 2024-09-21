@@ -40,6 +40,7 @@ receptive_field_new_model/size_tuning_disconnected_classical
 receptive_field_new_model/size_tuning_connected_inverse
 receptive_field_new_model/size_tuning_disconnected_inverse
 Time_to_first_spike_new_model/Data
+receptive_field_2109/Data
 multi_training_distributed.py
 v1_lm_spikes.pkl
 Borrar/Populations activity/prueba.png
