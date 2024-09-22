@@ -268,8 +268,8 @@ def main(_):
 if __name__ == '__main__':
 
     # Define the directory to save the results
-    _results_dir = 'receptive_field_new_model'
-    _checkpoint_dir = 'Benchmark_models/v1_90000_lm_30000'
+    _results_dir = 'receptive_field_2109'
+    _checkpoint_dir = 'Benchmark_models/v1_100000_lm_30000'
 
     # Define particular task flags
     absl.app.flags.DEFINE_string('results_dir', _results_dir, '')
