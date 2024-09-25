@@ -93,21 +93,60 @@ def select_spatial(x, y, convolved_movie):
     return spatial_responses
 
 
-def create_lgn_units_info(csv_path='/home/jgalvan/Desktop/Neurocoding/V1_GLIF_model/GLIF_network/network/lgn_node_types.csv', 
-                          h5_path='/home/jgalvan/Desktop/Neurocoding/V1_GLIF_model/GLIF_network/network//lgn_nodes.h5',
-                          filename='/home/jgalvan/Desktop/Neurocoding/V1_GLIF_model/lgn_model/data/lgn_full_col_cells.csv'
+# def create_lgn_units_info(csv_path='/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/GLIF_network/network/lgn_node_types.csv', 
+#                           h5_path='/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/GLIF_network/network//lgn_nodes.h5',
+#                           filename='/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/lgn_model/data/lgn_full_col_cells.csv'
+#                           ):
+#     filename = os.path.join('data', filename)
+#     # Load both the h5 file and the csv file
+#     csv_file = pd.read_csv(csv_path, sep=' ')
+#     features = ['id', 'model_id', 'x', 'y', 'ei', 'location', 'spatial_size', 'kpeaks_dom_0', 'kpeaks_dom_1', 'weight_dom_0', 'weight_dom_1', 'delay_dom_0', 'delay_dom_1', 'kpeaks_non_dom_0', 'kpeaks_non_dom_1', 'weight_non_dom_0', 'weight_non_dom_1', 'delay_non_dom_0', 'delay_non_dom_1', 'tuning_angle', 'sf_sep']
+#     df = pd.DataFrame(columns=features)
+
+#     with h5py.File(h5_path, 'r') as h5_file:
+#         node_id = h5_file['nodes']['lgn']['node_id'][:]
+#         node_type_id = h5_file['nodes']['lgn']['node_type_id'][:]
+#         for feature in h5_file['nodes']['lgn']['0'].keys():
+#             df[feature] = np.array(h5_file['nodes']['lgn']['0'][feature][:], dtype=np.float32)
+
+#     node_info = {}
+#     for index, row in csv_file.iterrows():
+#         node_info[row['node_type_id']] = {'model_id': row['pop_name'], 'location': row['location'], 'ei': row['ei']}
+
+#     df['id'] = node_id
+#     df['model_id'] = [node_info[node_type_id[i]]['model_id'] for i in range(len(node_type_id))]
+#     df['location'] = [node_info[node_type_id[i]]['location'] for i in range(len(node_type_id))]
+#     df['ei'] = [node_info[node_type_id[i]]['ei'] for i in range(len(node_type_id))]
+
+#     df.to_csv(filename, index=False, sep=' ', na_rep='NaN')
+#     return df
+
+def create_lgn_units_info(csv_path='/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/GLIF_network/network/lgn_node_types.csv', 
+                          h5_path='/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/GLIF_network/network//lgn_nodes.h5',
+                          filename='/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/lgn_model/data/lgn_full_col_cells.csv'
                           ):
-    filename = os.path.join('data', filename)
+    # filename = os.path.join('data', filename)
     # Load both the h5 file and the csv file
     csv_file = pd.read_csv(csv_path, sep=' ')
     features = ['id', 'model_id', 'x', 'y', 'ei', 'location', 'spatial_size', 'kpeaks_dom_0', 'kpeaks_dom_1', 'weight_dom_0', 'weight_dom_1', 'delay_dom_0', 'delay_dom_1', 'kpeaks_non_dom_0', 'kpeaks_non_dom_1', 'weight_non_dom_0', 'weight_non_dom_1', 'delay_non_dom_0', 'delay_non_dom_1', 'tuning_angle', 'sf_sep']
     df = pd.DataFrame(columns=features)
+    df0 = pd.DataFrame(columns=features)
+    df1 = pd.DataFrame(columns=features)
 
     with h5py.File(h5_path, 'r') as h5_file:
         node_id = h5_file['nodes']['lgn']['node_id'][:]
+        df['id'] = node_id
         node_type_id = h5_file['nodes']['lgn']['node_type_id'][:]
+        node_group_id = h5_file['nodes']['lgn']['node_group_id'][:]
+        # group 0 contains simple LGN cells
         for feature in h5_file['nodes']['lgn']['0'].keys():
-            df[feature] = np.array(h5_file['nodes']['lgn']['0'][feature][:], dtype=np.float32)
+            df0[feature] = np.array(h5_file['nodes']['lgn']['0'][feature][:], dtype=np.float32)
+        # group 1 contains complex LGN cells
+        for feature in h5_file['nodes']['lgn']['1'].keys():
+            df1[feature] = np.array(h5_file['nodes']['lgn']['1'][feature][:], dtype=np.float32)
+        # join the dataframes using h5_file['nodes']['lgn']['node_group_id'] as the key to select each row from one or the other group
+        df.iloc[node_group_id == 0] = df0
+        df.iloc[node_group_id == 1] = df1
 
     node_info = {}
     for index, row in csv_file.iterrows():
@@ -124,7 +163,7 @@ def create_lgn_units_info(csv_path='/home/jgalvan/Desktop/Neurocoding/V1_GLIF_mo
 
 class LGN(object):
     # @profile
-    def __init__(self, row_size=80, col_size=120, lgn_data_path=None, n_input=None):
+    def __init__(self, row_size=120, col_size=240, lgn_data_path=None, n_input=None):
         filename = f'lgn_full_col_cells_{col_size}x{row_size}.csv'
         root_path = os.path.split(__file__)[0]
         root_path = os.path.join(root_path, 'data')
@@ -360,6 +399,18 @@ class LGN(object):
             self.model_id = self.model_id[:n_input]
             self.is_composite = self.is_composite[:n_input]
 
+        # @tf.function  # No jit_compile here
+        # def perform_convolution(self, movie, gaussian_filter, bmtk_compat):
+        #     convolved_movie = tf.nn.conv2d(
+        #         movie, gaussian_filter, strides=[1, 1, 1, 1], padding='SAME')
+        #     # Handle BMTK compatibility if needed
+        #     if bmtk_compat:
+        #         ones = tf.ones_like(movie)
+        #         gaussian_fraction = tf.nn.conv2d(
+        #             ones, gaussian_filter, strides=[1, 1, 1, 1], padding='SAME')
+        #         convolved_movie = convolved_movie / gaussian_fraction
+        #     return convolved_movie
+
     @tf.function(jit_compile=True)
     def spatial_response(self, movie, bmtk_compat=True):
         # d_spatial = 1
@@ -385,8 +436,9 @@ class LGN(object):
             # Construct spatial filter
             gaussian_filter = self.gaussian_filters[i]  # Assuming self.gaussian_filters is a list of precomputed filters
             # Apply it
+            # Call the convolution function without JIT compilation
+            # convolved_movie = self.perform_convolution(movie, gaussian_filter, bmtk_compat)
             convolved_movie = tf.nn.conv2d(movie, gaussian_filter, strides=[1, 1, 1, 1], padding='SAME')
-            
             # Making BMTK compatible by normalizing the edge values
             if bmtk_compat:
                 ones = tf.ones_like(movie)
