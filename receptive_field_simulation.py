@@ -21,7 +21,7 @@ import ctypes.util
 
 # Define the environment variables for optimal GPU performance
 # os.environ['TF_GPU_THREAD_MODE'] = 'gpu_private'
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 print("--- CUDA version: ", tf.sysconfig.get_build_info()["cuda_version"])
 print("--- CUDNN version: ", tf.sysconfig.get_build_info()["cudnn_version"])
@@ -268,7 +268,7 @@ def main(_):
 if __name__ == '__main__':
 
     # Define the directory to save the results
-    _results_dir = 'receptive_field_2109'
+    _results_dir = 'receptive_field_0924'
     _checkpoint_dir = 'Benchmark_models/v1_100000_lm_30000'
 
     # Define particular task flags

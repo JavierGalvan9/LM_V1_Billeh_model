@@ -22,7 +22,7 @@ import ctypes.util
 
 # Define the environment variables for optimal GPU performance
 # os.environ['TF_GPU_THREAD_MODE'] = 'gpu_private'
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 print("--- CUDA version: ", tf.sysconfig.get_build_info()["cuda_version"])
 print("--- CUDNN version: ", tf.sysconfig.get_build_info()["cudnn_version"])
@@ -192,7 +192,7 @@ def main(_):
                     regular=regular,
                     temporal_f = 0,
                     cpd = 0,
-                    contrast = 1, # -1 --> black flash, 1 --> white flash
+                    contrast = -1, # -1 --> black flash, 1 --> white flash
                     phase = 90, 
                     moving_flag = False
                 ).batch(1)
@@ -255,8 +255,8 @@ def main(_):
 if __name__ == '__main__':
 
     # Define the directory to save the results
-    _results_dir = 'Time_to_first_spike_new_model'
-    _checkpoint_dir = 'Benchmark_models/v1_90000_lm_30000'
+    _results_dir = 'Time_to_first_spike_0924'
+    _checkpoint_dir = 'Benchmark_models/v1_100000_lm_30000'
 
     # Define particular task flags
     absl.app.flags.DEFINE_string('results_dir', _results_dir, '')
