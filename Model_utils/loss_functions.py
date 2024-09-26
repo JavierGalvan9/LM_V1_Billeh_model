@@ -304,7 +304,7 @@ class SpikeRateDistributionTarget:
 
 class SynchronizationLoss(Layer):
     def __init__(self, network, sync_cost=10., t_start=None, t_end=None, n_samples=50, data_dir='Synchronization_data', 
-                 area='v1', session='evoked', dtype=tf.float32, core_mask=None, **kwargs):
+                 area='v1', session='evoked', dtype=tf.float32, core_mask=None, seed=42, **kwargs):
         super(SynchronizationLoss, self).__init__(dtype=dtype, **kwargs)
         self._sync_cost = sync_cost
         self._t_start = t_start
@@ -316,6 +316,7 @@ class SynchronizationLoss(Layer):
         self._data_dir = data_dir
         self._dtype = dtype
         self._n_samples = n_samples
+        self._base_seed = seed
 
         pop_names = other_billeh_utils.pop_names(network)
         if self._core_mask is not None:
@@ -382,7 +383,8 @@ class SynchronizationLoss(Layer):
         spikes = tf.cast(spikes, self._dtype)  
         # choose random trials to sample from (usually we only have 1 trial to sample from)
         n_trials = tf.shape(spikes)[0]
-        sample_trials = tf.random.uniform([self._n_samples], minval=0, maxval=n_trials, dtype=tf.int32)
+        self._base_seed = self._base_seed + 1
+        sample_trials = tf.random.uniform([self._n_samples], minval=0, maxval=n_trials, dtype=tf.int32, seed=self._base_seed)
         # Generate sample counts with a normal distribution
         if self._area == 'v1':
             sample_size = 70
@@ -390,10 +392,10 @@ class SynchronizationLoss(Layer):
         else:
             sample_size = 33
             sample_std = 14
-        sample_counts = tf.cast(tf.random.normal([self._n_samples], mean=sample_size, stddev=sample_std), tf.int32)
+        sample_counts = tf.cast(tf.random.normal([self._n_samples], mean=sample_size, stddev=sample_std, seed=self._base_seed), tf.int32)
         sample_counts = tf.clip_by_value(sample_counts, clip_value_min=15, clip_value_max=tf.shape(self.node_id_e)[0]) # lower cap to 15 to avoid small samples
         # Randomize the neuron ids
-        shuffled_e_ids = tf.random.shuffle(self.node_id_e)
+        shuffled_e_ids = tf.random.shuffle(self.node_id_e, seed=self._base_seed)
         selected_spikes_sample = tf.TensorArray(self._dtype, size=self._n_samples)
         previous_id = tf.constant(0, dtype=tf.int32)
         for i in tf.range(self._n_samples):
@@ -403,7 +405,7 @@ class SynchronizationLoss(Layer):
             ## sample_ids = tf.random.shuffle(self.node_id_e)[:sample_num]
             ## randomly choose sample_num ids from shuffled_ids without replacement
             if previous_id + sample_num > tf.size(shuffled_e_ids):
-                shuffled_e_ids = tf.random.shuffle(self.node_id_e)
+                shuffled_e_ids = tf.random.shuffle(self.node_id_e, seed=self._base_seed)
                 previous_id = tf.constant(0, dtype=tf.int32)
             sample_ids = shuffled_e_ids[previous_id:previous_id+sample_num]
             previous_id += sample_num
@@ -416,7 +418,9 @@ class SynchronizationLoss(Layer):
         # # Calculate mean, standard deviation, and SEM of the Fano factors
         fanos_mean = tf.reduce_mean(fanos, axis=1)
         # # Calculate MSE between the experimental and calculated Fano factors
-        mse_loss = tf.sqrt(tf.reduce_mean(tf.square(experimental_fanos_mean - fanos_mean)))
+        # mse_loss = tf.sqrt(tf.reduce_mean(tf.square(experimental_fanos_mean - fanos_mean)))
+        # mse_loss = tf.reduce_mean(tf.square(experimental_fanos_mean - fanos_mean))
+        mse_loss = tf.reduce_sum(tf.square(experimental_fanos_mean - fanos_mean))
         # # Calculate the synchronization loss
         sync_loss = self._sync_cost * mse_loss
 
