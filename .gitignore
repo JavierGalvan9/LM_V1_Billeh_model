@@ -14,6 +14,30 @@ Model_utils/Other
 lgn_model/data
 Benchmark_models
 borrar.py
+
+Time_to_first_spike_analysis/Data
+Time_to_first_spike_analysis/Raster_plots
+Time_to_first_spike_analysis/tfs_data
+spikes_test.pkl
+OSI_DSI_dataset
+receptive_field_analysis/Data
+receptive_field_analysis/Data_10trials
+receptive_field_analysis/Data_50trials
+receptive_field_analysis/Data_disconnected
+receptive_field_analysis/Raster_plots
+receptive_field_analysis/size_tunning_classical_connected
+receptive_field_analysis/size_tunning_classical_disconnected
+receptive_field_analysis/size_tunning_inverse_connected
+receptive_field_analysis/size_tunning_inverse_disconnected
+receptive_field_analysis/RFs
+receptive_field_analysis/size_tunning_all_plots
+receptive_field_analysis/rf_data
+
+multi_training_distributed.py
+v1_lm_spikes.pkl
+Borrar/Populations activity/prueba.png
+Neuropixels_platform_paper/data/sub-703279277_ses-719161530.nwb
+
 spikes_test.pkl
 OSI_DSI_dataset
 multi_training_distributed.py
@@ -49,3 +73,4 @@ Time_to_first_spike_0924/Data
 
 receptive_field_0924/Data_connected
 receptive_field_0924/Data_disconnected
+
