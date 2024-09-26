@@ -11,6 +11,7 @@ new_pruebas.ipynb
 .ipynb_checkpoint*
 Model_utils/.cache
 Model_utils/Other
+Model_utils/models_old.py
 lgn_model/data
 Benchmark_models
 borrar.py
@@ -20,6 +21,7 @@ Time_to_first_spike_analysis/Raster_plots
 Time_to_first_spike_analysis/tfs_data
 spikes_test.pkl
 OSI_DSI_dataset
+OSI_analysis/
 receptive_field_analysis/Data
 receptive_field_analysis/Data_10trials
 receptive_field_analysis/Data_50trials
@@ -34,6 +36,7 @@ receptive_field_analysis/size_tunning_all_plots
 receptive_field_analysis/rf_data
 
 multi_training_distributed.py
+generar_figures.ipynb
 v1_lm_spikes.pkl
 Borrar/Populations activity/prueba.png
 Neuropixels_platform_paper/data/sub-703279277_ses-719161530.nwb
