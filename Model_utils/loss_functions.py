@@ -419,8 +419,8 @@ class SynchronizationLoss(Layer):
         fanos_mean = tf.reduce_mean(fanos, axis=1)
         # # Calculate MSE between the experimental and calculated Fano factors
         # mse_loss = tf.sqrt(tf.reduce_mean(tf.square(experimental_fanos_mean - fanos_mean)))
-        # mse_loss = tf.reduce_mean(tf.square(experimental_fanos_mean - fanos_mean))
-        mse_loss = tf.reduce_sum(tf.square(experimental_fanos_mean - fanos_mean))
+        mse_loss = tf.reduce_mean(tf.square(experimental_fanos_mean - fanos_mean))
+        # mse_loss = tf.reduce_sum(tf.square(experimental_fanos_mean - fanos_mean))
         # # Calculate the synchronization loss
         sync_loss = self._sync_cost * mse_loss
 
