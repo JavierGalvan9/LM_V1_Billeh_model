@@ -17,7 +17,8 @@ def load_network(path="GLIF_network/v1_network_dat.pkl",
                  seed=3000, 
                  connected_selection=True,
                  column_name='v1',
-                 tensorflow_speed_up=False):
+                 tensorflow_speed_up=False,
+                 random_weights=False):
     
     rd = np.random.RandomState(seed=seed)
 
@@ -174,6 +175,10 @@ def load_network(path="GLIF_network/v1_network_dat.pkl",
         target_tf_ids = target_tf_ids[edge_exists]
         source_tf_ids = source_tf_ids[edge_exists]
         weights_tf = edge["params"]["weight"][edge_exists]
+        # if random weights, we assign random values to the weights maintaining the sign, the mean and the std of the original weights
+        if random_weights:
+            np.random.shuffle(weights_tf)
+            # weights_tf = np.sign(weights_tf) * np.abs(rd.normal(loc=np.mean(weights_tf), scale=np.std(weights_tf), size=weights_tf.size))
 
         n_new_edge = len(target_tf_ids)
         n_edges += int(n_new_edge)
@@ -469,7 +474,8 @@ def load_billeh(flags, n_neurons, flag_str=''):
                                             seed=flags.seed, 
                                             connected_selection=flags.connected_selection,
                                             column_name=column_name,
-                                            tensorflow_speed_up=False)
+                                            tensorflow_speed_up=False,
+                                            random_weights=flags.random_weights)
         networks[column_name] = set_laminar_indices(networks[column_name], column_name=column_name, data_dir = flags.data_dir)
 
         ###### Select random l5e neurons for tracking output #########
@@ -602,7 +608,7 @@ def cached_load_billeh(flags, n_neurons, flag_str=''):
     v1_neurons = n_neurons['v1']
     lm_neurons = n_neurons['lm']
     if flag_str == '':
-        flag_str = f'v1_{v1_neurons}_lm_{lm_neurons}_s{flags.seed}_c{flags.core_only}_con{flags.connected_selection}_n_input_{flags.n_input}_interarea_weight_distribution_{flags.interarea_weight_distribution}_E4_weight_factor_{flags.E4_weight_factor}_disconnect_v1_lm_L6_excitatory_projections_{flags.disconnect_v1_lm_L6_excitatory_projections}'
+        flag_str = f'v1_{v1_neurons}_lm_{lm_neurons}_s{flags.seed}_c{flags.core_only}_con{flags.connected_selection}_n_input_{flags.n_input}_interarea_weight_distribution_{flags.interarea_weight_distribution}_E4_weight_factor_{flags.E4_weight_factor}_disconnect_v1_lm_L6_excitatory_projections_{flags.disconnect_v1_lm_L6_excitatory_projections}_random_weights_{flags.random_weights}'
     
     file_dir = os.path.split(__file__)[0]
     cache_path = os.path.join(file_dir, f'.cache/lm_v1_network_{flag_str}.pkl')
