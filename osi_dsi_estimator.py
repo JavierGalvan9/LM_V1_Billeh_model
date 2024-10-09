@@ -172,7 +172,7 @@ def main(_):
 
         # Store the initial model variables that are going to be trained
         model_variables_dict = {'Initial': {var.name: var.numpy().astype(np.float16) for var in model.trainable_variables}}
-
+        
         # Define the optimizer
          # Define the optimizer
         if flags.optimizer == 'adam':
@@ -275,7 +275,7 @@ def main(_):
                 print(f'Angle {angle} done.')
                 print(f'    Trial running time: {time() - t0:.2f}s')
                 for gpu_id in range(len(strategy.extended.worker_devices)):
-                    mem_data = printgpu(gpu_id=gpu_id, verbose=1)
+                    printgpu(gpu_id=gpu_id)
                     print(f'    Memory consumption (current - peak) GPU {gpu_id}: {mem_data[0]:.2f} GB - {mem_data[1]:.2f} GB')
 
             # Save the dataset      
@@ -382,7 +382,7 @@ def main(_):
                 print(f'Trial {trial_id+1}/{flags.n_trials_per_angle} - Angle {angle} done.')
                 print(f'    Trial running time: {time() - t0:.2f}s')
                 for gpu_id in range(len(strategy.extended.worker_devices)):
-                    mem_data = printgpu(gpu_id=gpu_id, verbose=1)
+                    printgpu(gpu_id=gpu_id)
                     print(f'    Memory consumption (current - peak) GPU {gpu_id}: {mem_data[0]:.2f} GB - {mem_data[1]:.2f} GB')
                 if not flags.calculate_osi_dsi:
                     break

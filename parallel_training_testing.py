@@ -143,7 +143,7 @@ def main():
     # Define the job submission commands for the training and evaluation scripts
     # training_commands = ["run", "-g", "1", "-m", "24", "-t", "1:15"]
     # evaluation_commands = ["run", "-g", "1", "-m", "65", "-t", "0:45"]
-    training_commands = ["run", "-g", "1", "-G", "L40S", "-m", "24", "-t", "3:30"] # choose the particular gpu model for training with 48 GB of memory
+    training_commands = ["run", "-g", "1", "-G", "L40S", "-m", "48", "-t", "3:30"] # choose the particular gpu model for training with 48 GB of memory
     evaluation_commands = ["run", "-g", "1", "-m", "80", "-t", "2:15"]
 
     # Define the training and evaluation script calls

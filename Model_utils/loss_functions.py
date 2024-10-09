@@ -48,8 +48,10 @@ class StiffRegularizer(Layer):
         self._target_mean_weights = tf.constant(initial_mean_weights, dtype=dtype)
     
     def __call__(self, x):
-        # if x.dtype != self._dtype:
-        #     x = tf.cast(x, self._dtype)
+
+        if len(x.shape) > 1 and x.shape[1] == 1:
+            x = tf.squeeze(x, axis=1)
+
         mean_edge_type_weights = tf.math.unsorted_segment_mean(x, self.idx, self.num_unique)
         if self._penalize_relative_change:
             # return self._strength * tf.reduce_mean(tf.abs(x - self._initial_value))
@@ -97,6 +99,10 @@ class L2Regularizer(tf.keras.regularizers.Regularizer):
             self._target_mean_weights = None
 
     def __call__(self, x):
+
+        if len(x.shape) > 1 and x.shape[1] == 1:
+            x = tf.squeeze(x, axis=1)
+            
         if self._target_mean_weights is None:
             return self._strength * tf.reduce_mean(tf.square(x))
         else:
@@ -419,8 +425,8 @@ class SynchronizationLoss(Layer):
         fanos_mean = tf.reduce_mean(fanos, axis=1)
         # # Calculate MSE between the experimental and calculated Fano factors
         # mse_loss = tf.sqrt(tf.reduce_mean(tf.square(experimental_fanos_mean - fanos_mean)))
-        mse_loss = tf.reduce_mean(tf.square(experimental_fanos_mean - fanos_mean))
-        # mse_loss = tf.reduce_sum(tf.square(experimental_fanos_mean - fanos_mean))
+        # mse_loss = tf.reduce_mean(tf.square(experimental_fanos_mean - fanos_mean))
+        mse_loss = tf.reduce_sum(tf.square(experimental_fanos_mean - fanos_mean))
         # # Calculate the synchronization loss
         sync_loss = self._sync_cost * mse_loss
 
