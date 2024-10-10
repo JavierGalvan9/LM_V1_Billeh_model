@@ -24,6 +24,7 @@ from Model_utils.callbacks import Callbacks
 
 from time import time
 import ctypes.util
+import random
 
 
 print("--- CUDA version: ", tf.sysconfig.get_build_info()["cuda_version"])
@@ -49,9 +50,11 @@ def main(_):
     print("- Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')), '\n')
 
     flags = absl.app.flags.FLAGS
+
     # Set the seeds for reproducibility
     np.random.seed(flags.seed)
     tf.random.set_seed(flags.seed)
+    random.seed(flags.seed)
 
     if flags.realistic_neurons_ratio:
         # Select the connectivity rules in the network
@@ -454,8 +457,6 @@ def main(_):
         # Update the EMAs
         v1_ema.assign(ema_decay * v1_ema + (1 - ema_decay) * v1_rates)
         lm_ema.assign(ema_decay * lm_ema + (1 - ema_decay) * lm_rates)
-        tf.print('V1_ema: ', tf.reduce_mean(v1_ema), tf.reduce_mean(v1_rates), v1_ema)
-        tf.print('lm_ema: ', tf.reduce_mean(lm_ema), tf.reduce_mean(lm_rates), lm_ema)
 
         v1_voltage_loss = v1_voltage_regularizer(_v1_v) # trim is irrelevant for this
         lm_voltage_loss = lm_voltage_regularizer(_lm_v) # trim is irrelevant for this

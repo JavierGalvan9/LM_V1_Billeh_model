@@ -747,7 +747,7 @@ class BillehColumn(tf.keras.layers.Layer):
         # it identifies the non_zero rows of rec_z_buf and only computes the
         # sparse matrix multiplication for those rows.
         if self.interarea_indices[column_order] is None:
-            return tf.zeros((self._n_receptors * self._n_neurons, 1), dtype=self._compute_dtype)
+            return tf.zeros((1, self._n_receptors * self._n_neurons), dtype=self._compute_dtype)
         # find the non-zero rows of rec_z_buf
         non_zero_cols = tf.where(interarea_z_bufs)[:, 1]
         new_indices, inds = get_new_inds_table(self.interarea_indices[column_order], non_zero_cols, self.pre_interarea_ind_table[column_order])        
