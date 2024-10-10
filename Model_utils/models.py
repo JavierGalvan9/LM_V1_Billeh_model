@@ -249,6 +249,10 @@ class BackgroundNoiseLayer(tf.keras.layers.Layer):
                                             inputs, 
                                             adjoint_b=True
                                             )
+        # Optionally cast the output back to float16
+        if i_in.dtype != self._dtype:
+            i_in = tf.cast(i_in, dtype=self._dtype)
+
         return i_in
 
     def call(self, inp):
@@ -259,7 +263,7 @@ class BackgroundNoiseLayer(tf.keras.layers.Layer):
         #                                   dtype=self._dtype) # this implementation is slower
         rest_of_brain = tf.cast(tf.random.uniform(
                 (self._batch_size, seq_len, self._n_bkg_units)) < self._bkg_firing_rate * .001, 
-                self._dtype) # (1, 600, 100)
+                tf.float32) # (1, 600, 100)
         
         rest_of_brain = tf.reshape(rest_of_brain, (self._batch_size * seq_len, self._n_bkg_units))
 
@@ -270,6 +274,7 @@ class BackgroundNoiseLayer(tf.keras.layers.Layer):
             noise_inputs[column] = tf.reshape(noise_input, (self._batch_size, seq_len, -1))
         
         cat_noise_inputs = tf.concat([noise_inputs['v1'], noise_inputs['lm']], axis=-1)
+
         return cat_noise_inputs
 
 
@@ -361,11 +366,12 @@ class LGNInputLayerCell(tf.keras.layers.Layer):
     #     # If you have any trainable variables, initialize them here
     #     pass
 
+    @tf.function
     def call(self, inputs_t, states):
         # inputs_t: Shape [batch_size, input_dim]
         # batch_size = tf.shape(inputs_t)[0]
         # Compute the input current for the timestep
-        non_zero_cols = tf.where(inputs_t)[:, 1]
+        non_zero_cols = tf.where(inputs_t > 0)[:, 1]
         new_indices, inds = get_new_inds_table(self._indices, non_zero_cols, self.pre_ind_table)
         # Sort the segment IDs and corresponding data
         sorted_indices = tf.argsort(new_indices[:, 0])
@@ -374,16 +380,21 @@ class LGNInputLayerCell(tf.keras.layers.Layer):
         # Get the weights for each active synapse
         sorted_data = tf.gather(self._input_weights, sorted_inds, axis=0)
         # Calculate the total LGN input current received by each neuron
-        i_rec = tf.math.unsorted_segment_sum(
+        i_in = tf.math.unsorted_segment_sum(
             sorted_data,
             sorted_segment_ids,
             num_segments=self._dense_shape[0]
         )
+
+        # Optionally cast the output back to float16
+        if i_in.dtype != self._dtype:
+            i_in = tf.cast(i_in, dtype=self._dtype)
+
         # Add batch dimension
-        i_rec = tf.expand_dims(i_rec, axis=0)  # Shape: [1, n_post_neurons, n_syn_basis]
-        
+        i_in = tf.expand_dims(i_in, axis=0)  # Shape: [1, n_post_neurons, n_syn_basis]
+                
         # Since no states are maintained, return empty state
-        return i_rec, []
+        return i_in, []
 
 
 class LGNInputLayer(tf.keras.layers.Layer):
@@ -542,7 +553,7 @@ class BillehColumn(tf.keras.layers.Layer):
         # inverse sigmoid of the adaptation rate constant (1/ms)
         param_k, param_k_read = custom_val(_k, trainable=False) # ?? what is this doing?
         k = param_k_read()
-        self.exp_dt_k = tf.exp(-self._dt * k)
+        self.exp_dt_k = tf.cast(tf.exp(-self._dt * k), self._compute_dtype)
 
         self.v_th = _f(_params["V_th"])
         self.v_gap = self.v_reset - self.v_th
@@ -592,7 +603,7 @@ class BillehColumn(tf.keras.layers.Layer):
             name=self.name+'_sparse_recurrent_weights',
             constraint=SignedConstraint(recurrent_weight_positive),
             trainable=train_recurrent,
-            dtype=self._compute_dtype
+            dtype=tf.float32
         ) # shape = (n_synapses,)
 
         print(f"    > # Recurrent synapses: {len(indices)}")
@@ -625,7 +636,7 @@ class BillehColumn(tf.keras.layers.Layer):
                 name=self.name+'_sparse_input_weights',
                 constraint=SignedConstraint(input_weight_positive),
                 trainable=train_input,
-                dtype=self._compute_dtype)
+                dtype=tf.float32)
 
             print(f"    > # LGN input synapses {len(input_indices)}")
             del input_indices, input_weights, input_receptor_ids, input_delays
@@ -657,7 +668,7 @@ class BillehColumn(tf.keras.layers.Layer):
             name=self.name+'_rest_of_brain_weights', 
             constraint=SignedConstraint(bkg_input_weight_positive),
             trainable=train_noise,
-            dtype=self._compute_dtype
+            dtype=tf.float32
         )
 
         print(f"    > # BKG input synapses {len(bkg_input_indices)}")
@@ -699,7 +710,7 @@ class BillehColumn(tf.keras.layers.Layer):
                 interarea_weights * interarea_weight_scale / lr_scale, 
                 name=self.name+'_sparse_interarea_weights_'+self.source_column_order,
                 constraint=SignedConstraint(interarea_weight_positive),
-                dtype=self._compute_dtype,
+                dtype=tf.float32,
                 trainable=train_interarea)
                         
             # check legal indices
@@ -719,9 +730,10 @@ class BillehColumn(tf.keras.layers.Layer):
 
         print('Init finished!!')
     
+    # @tf.function
     def calculate_i_rec(self, rec_z_buf):
         # This implementation works only for batch size 1
-        non_zero_cols = tf.where(rec_z_buf)[:, 1]
+        non_zero_cols = tf.where(rec_z_buf > 0)[:, 1]
         new_indices, inds = get_new_inds_table(self.recurrent_indices, non_zero_cols, self.pre_ind_table)
         # Sort the segment IDs and corresponding data
         sorted_indices = tf.argsort(new_indices[:, 0])
@@ -734,10 +746,14 @@ class BillehColumn(tf.keras.layers.Layer):
             sorted_segment_ids,
             num_segments=self.recurrent_dense_shape[0]
         )
+        # i_rec = tf.cast(i_rec, dtype=self._compute_dtype)
+        if i_rec.dtype != self._compute_dtype:
+            i_rec = tf.cast(i_rec, dtype=self._compute_dtype)
         # Add batch dimension
         i_rec = tf.expand_dims(i_rec, axis=0)
         return i_rec
     
+    # @tf.function
     def calculate_i_inter(self, interarea_z_bufs, column_order):
         # This implementation works only for batch size 1
         # This function performs the tensor multiplication to calculate the recurrent currents at each timestep
@@ -749,7 +765,7 @@ class BillehColumn(tf.keras.layers.Layer):
         if self.interarea_indices[column_order] is None:
             return tf.zeros((1, self._n_receptors * self._n_neurons), dtype=self._compute_dtype)
         # find the non-zero rows of rec_z_buf
-        non_zero_cols = tf.where(interarea_z_bufs)[:, 1]
+        non_zero_cols = tf.where(interarea_z_bufs > 0)[:, 1]
         new_indices, inds = get_new_inds_table(self.interarea_indices[column_order], non_zero_cols, self.pre_interarea_ind_table[column_order])        
         # Sort the segment IDs and corresponding data
         sorted_indices = tf.argsort(new_indices[:, 0])
@@ -762,6 +778,10 @@ class BillehColumn(tf.keras.layers.Layer):
             sorted_segment_ids,
             num_segments=self.interarea_dense_shapes[column_order][0]
         )
+        # Add batch dimension
+        # i_interarea = tf.cast(i_interarea, dtype=self._compute_dtype)  # convert float32 to float16 if needed
+        if i_interarea.dtype != self._compute_dtype:
+            i_interarea = tf.cast(i_interarea, dtype=self._compute_dtype)
         # Add batch dimension
         i_interarea = tf.expand_dims(i_interarea, axis=0)
         return i_interarea
@@ -795,15 +815,16 @@ class BillehColumn(tf.keras.layers.Layer):
 
         return z0_buf, v0, r0, asc, psc_rise0, psc0 
 
+    @tf.function
     def call(self, inputs, state, constants=None):
         # Get all the model inputs
         external_current, bkg_noise, interarea_z_bufs, state_input = inputs
         batch_size = tf.shape(bkg_noise)[0]
         
         if self._spike_gradient:
-            state_input = tf.zeros((1,))
+            state_input = tf.zeros((1,), dtype=self._compute_dtype)
         else:
-            state_input = tf.zeros((4,))           
+            state_input = tf.zeros((4,), dtype=self._compute_dtype)           
         
         # Extract the network variables from the state
         z_buf, v, r, asc, psc_rise, psc = state

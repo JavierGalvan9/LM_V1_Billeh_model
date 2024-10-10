@@ -96,6 +96,7 @@ def main(_):
         else:
             mixed_precision.set_global_policy('mixed_float16')
         dtype = tf.float16
+        print('Mixed precision enabled!')
     else:
         dtype = tf.float32
 
@@ -177,12 +178,14 @@ def main(_):
         # optimizer = tf.keras.optimizers.Adam(flags.learning_rate, epsilon=1e-11, clipnorm=0.001)  
         if flags.optimizer == 'adam':
             optimizer = tf.keras.optimizers.Adam(flags.learning_rate, epsilon=1e-11)  
+            
         elif flags.optimizer == 'sgd':
             optimizer = tf.keras.optimizers.SGD(flags.learning_rate, momentum=0.0, nesterov=False)
         else:
             print(f"Invalid optimizer: {flags.optimizer}")
             raise ValueError
         
+        # optimizer = mixed_precision.LossScaleOptimizer(base_optimizer) # If suffering from underflow gradients when using tf.float16 (not the case here)
         optimizer.build(model.trainable_variables)
 
         # Restore model and optimizer from a checkpoint if it exists
@@ -305,8 +308,8 @@ def main(_):
                 lm_ema = tf.Variable(data_loaded['lm_ema'], trainable=False, name='LM_EMA')
         else:
             # 3 Hz is near the average FR of cortex
-            v1_ema = tf.Variable(tf.constant(0.003, shape=(v1_neurons,)), trainable=False, name='V1_EMA')
-            lm_ema = tf.Variable(tf.constant(0.003, shape=(lm_neurons,)), trainable=False, name='LM_EMA')
+            v1_ema = tf.Variable(tf.constant(0.003, shape=(v1_neurons,), dtype=dtype), trainable=False, name='V1_EMA')
+            lm_ema = tf.Variable(tf.constant(0.003, shape=(lm_neurons,), dtype=dtype), trainable=False, name='LM_EMA')
 
         # if training for spontaneous firing rates set the osi loss to 0
         if flags.spontaneous_training:
@@ -651,6 +654,7 @@ def main(_):
                 bmtk_compat=flags.bmtk_compat_lgn,
                 rotation=flags.rotation,
                 billeh_phase=True,
+                dtype=dtype
             ).batch(per_replica_batch_size)
                         
             return _data_set
@@ -666,6 +670,7 @@ def main(_):
                 rotation=flags.rotation,
                 billeh_phase=True,
                 return_firing_rates=True,
+                dtype=dtype
             ).batch(per_replica_batch_size)
                         
             return _lgn_firing_rates
@@ -675,8 +680,8 @@ def main(_):
     # test_data_set = strategy.distribute_datasets_from_function(get_dataset_fn(regular=True))   
     gray_data_set = strategy.distribute_datasets_from_function(get_gray_dataset_fn())
     gray_it = iter(gray_data_set)
-    y_spontaneous = tf.constant(0, dtype=tf.float32, shape=(1,1)) 
-    w_spontaneous = tf.constant(flags.seq_len, dtype=tf.float32, shape=(1,1))
+    y_spontaneous = tf.constant(0, dtype=dtype, shape=(1,1)) 
+    w_spontaneous = tf.constant(flags.seq_len, dtype=dtype, shape=(1,1))
     spontaneous_lgn_firing_rates = next(iter(gray_data_set))   
     spontaneous_lgn_firing_rates = tf.constant(spontaneous_lgn_firing_rates, dtype=dtype)
     # load LGN spontaneous firing rates 
@@ -684,7 +689,7 @@ def main(_):
 
     @tf.function(jit_compile=True)
     def generate_spontaneous_spikes(spontaneous_prob):
-        x_spontaneous = tf.random.uniform(tf.shape(spontaneous_prob)) < spontaneous_prob
+        x_spontaneous = tf.random.uniform(tf.shape(spontaneous_prob), dtype=dtype) < spontaneous_prob
         return x_spontaneous
     
     del gray_data_set, gray_it, spontaneous_lgn_firing_rates
