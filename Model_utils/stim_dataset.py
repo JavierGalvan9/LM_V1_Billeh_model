@@ -36,8 +36,8 @@ def make_drifting_grating_stimulus(row_size=120, col_size=240, moving_flag=True,
 
     # physical_spacing = 1. / (float(cpd) * 10)    #To make sure no aliasing occurs
     physical_spacing = 1.0  # 1 degree, fixed for now. tf version lgn model need this to keep true cpd;
-    row_range = tf.linspace(0.0, row_size, tf.cast(row_size, tf.int32))
-    col_range = tf.linspace(0.0, col_size, tf.cast(col_size, tf.int32))
+    row_range = tf.cast(tf.linspace(0.0, row_size, tf.cast(row_size, tf.int32)), dtype=dtype)
+    col_range = tf.cast(tf.linspace(0.0, col_size, tf.cast(col_size, tf.int32)), dtype=dtype)
     # number_frames_needed = int(round(frame_rate * t_max))
     number_frames_needed = tf.cast(tf.math.round(frame_rate * t_max), tf.int32)
     time_range = tf.cast(tf.linspace(0.0, t_max, number_frames_needed), dtype=dtype)

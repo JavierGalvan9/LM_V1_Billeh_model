@@ -91,6 +91,7 @@ def main(_):
         else:
             mixed_precision.set_global_policy('mixed_float16')
         dtype = tf.float16
+        print('Mixed precision enabled!')
     else:
         dtype = tf.float32
 
@@ -260,6 +261,7 @@ def main(_):
                         return_firing_rates=True,
                         rotation=flags.rotation,
                         billeh_phase=True,
+                        dtype=dtype
                     ).batch(1)
                                 
                     return _lgn_firing_rates
@@ -300,6 +302,7 @@ def main(_):
                     rotation=flags.rotation,
                     billeh_phase=True,
                     return_firing_rates=True,
+                    dtype=dtype
                 ).batch(per_replica_batch_size)
                             
                 return _lgn_firing_rates
@@ -314,7 +317,7 @@ def main(_):
         # load LGN spontaneous firing rates 
         spontaneous_prob = 1 - tf.exp(-spontaneous_lgn_firing_rates / 1000.)
         # Generate LGN spikes
-        x = tf.random.uniform(tf.shape(spontaneous_prob)) < spontaneous_prob
+        x = tf.random.uniform(tf.shape(spontaneous_prob), dtype=dtype) < spontaneous_prob
         # Run a gray simulation to get the model state
         tf.nest.map_structure(lambda a, b: a.assign(b), state_variables, zero_state)    
         _, _, gray_state = distributed_roll_out(x)
@@ -364,7 +367,7 @@ def main(_):
                 distributed_reset_state('gray', gray_state=gray_state)
 
                 # Generate LGN spikes
-                x = tf.random.uniform(tf.shape(_p)) < _p
+                x = tf.random.uniform(tf.shape(_p), dtype=dtype) < _p
                 chunk_size = flags.seq_len
                 num_chunks = (2500//chunk_size + 1)
                 for i in range(num_chunks):
