@@ -139,7 +139,7 @@ def main(_):
             bkg_inputs, 
             seq_len=flags.seq_len,
             n_input=flags.n_input, 
-            dtype=tf.float32, 
+            dtype=dtype, 
             input_weight_scale=flags.input_weight_scale,
             interarea_weight_scale=1., 
             recurrent_dampening_factor=flags.recurrent_dampening_factor,
@@ -386,7 +386,7 @@ def main(_):
                 print(f'    Trial running time: {time() - t0:.2f}s')
                 for gpu_id in range(len(strategy.extended.worker_devices)):
                     printgpu(gpu_id=gpu_id)
-                    print(f'    Memory consumption (current - peak) GPU {gpu_id}: {mem_data[0]:.2f} GB - {mem_data[1]:.2f} GB')
+
                 if not flags.calculate_osi_dsi:
                     break
 

@@ -345,8 +345,8 @@ class SynchronizationLoss(Layer):
         experimental_data_path = os.path.join(data_dir, f'Fano_factor_{self._area}', f'{self._area}_fano_running_300ms_{session}.npy')
         experimental_fanos = np.load(experimental_data_path, allow_pickle=True)
         # Calculate mean, standard deviation, and SEM of the Fano factors
-        experimental_fanos_mean = np.nanmean(experimental_fanos, axis=0)
-        self.experimental_fanos_mean = tf.constant(experimental_fanos_mean[bin_sizes_mask], dtype=self._dtype)
+        experimental_fanos_mean = np.nanmean(experimental_fanos[:, bin_sizes_mask], axis=0)
+        self.experimental_fanos_mean = tf.constant(experimental_fanos_mean, dtype=self._dtype)
 
     def pop_fano_tf(self, spikes, bin_sizes):
         # transpose the spikes tensor to have the shape (seq_len, samples)
