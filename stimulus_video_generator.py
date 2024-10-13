@@ -293,12 +293,12 @@ def generate_gabor_patches_video(phase=None, orientation=None, temporal_f=2, cpd
 #--------------------------------------------------------------------------
 # video = generate_gabor_patches_video(temporal_f=2, cpd=0.04, contrast=1, seq_len=350, moving_flag=True, orientation = 45, x0 = 3, y0 = 3) # gabor patches
 
-video = generate_gabor_patches_video(temporal_f=2, cpd=0.04, contrast=1, seq_len=350, moving_flag=True, orientation = 45, 
-                                     x0 = 6, y0 = 5, r = 10, inverse = True) # gabor patches inverse
+#video = generate_gabor_patches_video(temporal_f=2, cpd=0.04, contrast=1, seq_len=350, moving_flag=True, orientation = 45, 
+#                                    x0 = 6, y0 = 5, r = 10, inverse = True) # gabor patches inverse
 
 #video = generate_drifting_grating_video(temporal_f=0, cpd=0, contrast=-1, seq_len=350, moving_flag=False, phase = 90) # full-field flash
 
-#video = generate_drifting_grating_video(temporal_f=40, cpd=0.04, contrast=0.8, seq_len=350, moving_flag=True) # moving gratings
+video = generate_drifting_grating_video(temporal_f=4, cpd=0.04, contrast=0.8, seq_len=350, moving_flag=True) # moving gratings
 
 video = ((video + 1) * 127.5).astype(np.uint8) # normalize to 0-255
-imageio.mimsave('animations/gabor_patches_inverse.gif', video, fps=30)  # Adjust fps as needed
+imageio.mimsave('animations/moving_gratings_test.gif', video, fps=30)  # Adjust fps as needed
