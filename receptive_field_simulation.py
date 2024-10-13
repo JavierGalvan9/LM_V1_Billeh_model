@@ -199,7 +199,7 @@ def main(_):
                         cpd = 0.04,
                         contrast = 1,
                         moving_flag = True, 
-                        inverse = False
+                        inverse = True
                     ).batch(1)
                                 
                     return _data_set
