@@ -24,6 +24,7 @@ from Model_utils.callbacks import Callbacks
 
 from time import time
 import ctypes.util
+import random
 
 
 print("--- CUDA version: ", tf.sysconfig.get_build_info()["cuda_version"])
@@ -49,9 +50,11 @@ def main(_):
     print("- Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')), '\n')
 
     flags = absl.app.flags.FLAGS
+
     # Set the seeds for reproducibility
     np.random.seed(flags.seed)
     tf.random.set_seed(flags.seed)
+    random.seed(flags.seed)
 
     if flags.realistic_neurons_ratio:
         # Select the connectivity rules in the network
@@ -70,7 +73,7 @@ def main(_):
     if logdir == '':
         flag_str = f'v1_{v1_neurons}_lm_{lm_neurons}'
         for name, value in flags.flag_values_dict().items():
-            if value != flags[name].default and name in ['n_input', 'core_only', 'connected_selection', 'interarea_weight_distribution', 'E4_weight_factor']:
+            if value != flags[name].default and name in ['n_input', 'core_only', 'connected_selection', 'interarea_weight_distribution', 'E4_weight_factor', 'random_weights']:
                 flag_str += f'_{name}_{value}'
         # Define flag string as the second part of results_path
         results_dir = f'{flags.results_dir}/{flag_str}'
@@ -93,6 +96,7 @@ def main(_):
         else:
             mixed_precision.set_global_policy('mixed_float16')
         dtype = tf.float16
+        print('Mixed precision enabled!')
     else:
         dtype = tf.float32
 
@@ -174,12 +178,14 @@ def main(_):
         # optimizer = tf.keras.optimizers.Adam(flags.learning_rate, epsilon=1e-11, clipnorm=0.001)  
         if flags.optimizer == 'adam':
             optimizer = tf.keras.optimizers.Adam(flags.learning_rate, epsilon=1e-11)  
+            
         elif flags.optimizer == 'sgd':
             optimizer = tf.keras.optimizers.SGD(flags.learning_rate, momentum=0.0, nesterov=False)
         else:
             print(f"Invalid optimizer: {flags.optimizer}")
             raise ValueError
         
+        # optimizer = mixed_precision.LossScaleOptimizer(base_optimizer) # If suffering from underflow gradients when using tf.float16 (not the case here)
         optimizer.build(model.trainable_variables)
 
         # Restore model and optimizer from a checkpoint if it exists
@@ -283,12 +289,12 @@ def main(_):
         # v1_sync_regularizer = losses.SynchronizationLoss(sync_cost=flags.sync_cost, target_sync=0., area='v1', core_mask=v1_core_mask, pre_delay=delays[0], post_delay=delays[1], dtype=dtype)
         # lm_sync_regularizer = losses.SynchronizationLoss(sync_cost=flags.sync_cost, target_sync=0., area='lm', core_mask=lm_core_mask, pre_delay=delays[0], post_delay=delays[1], dtype=dtype)
         # model.add_loss(lambda: v1_sync_regularizer(rsnn_layer.output[0][0]) + lm_sync_regularizer(rsnn_layer.output[0][2]))
-        v1_evoked_sync_loss = losses.SynchronizationLoss(networks['v1'], sync_cost=flags.sync_cost, area='v1', core_mask=v1_core_mask, t_start=0.2, t_end=0.5, n_samples=500, dtype=dtype, session='evoked', data_dir='Synchronization_data')
-        lm_evoked_sync_loss = losses.SynchronizationLoss(networks['lm'], sync_cost=flags.sync_cost, area='lm', core_mask=lm_core_mask, t_start=0.2, t_end=0.5, n_samples=500, dtype=dtype, session='evoked', data_dir='Synchronization_data')
+        v1_evoked_sync_loss = losses.SynchronizationLoss(networks['v1'], sync_cost=flags.sync_cost, area='v1', core_mask=v1_core_mask, t_start=0.2, t_end=flags.seq_len/1000, n_samples=500, dtype=dtype, session='evoked', data_dir='Synchronization_data')
+        lm_evoked_sync_loss = losses.SynchronizationLoss(networks['lm'], sync_cost=flags.sync_cost, area='lm', core_mask=lm_core_mask, t_start=0.2, t_end=flags.seq_len/1000, n_samples=500, dtype=dtype, session='evoked', data_dir='Synchronization_data')
         model.add_loss(lambda: v1_evoked_sync_loss(rsnn_layer.output[0][0]) + lm_evoked_sync_loss(rsnn_layer.output[0][2]))
 
-        v1_spont_sync_loss = losses.SynchronizationLoss(networks['v1'], sync_cost=flags.sync_cost, area='v1', core_mask=v1_core_mask, t_start=0.2, t_end=0.5, n_samples=500, dtype=dtype, session='spont', data_dir='Synchronization_data')
-        lm_spont_sync_loss = losses.SynchronizationLoss(networks['lm'], sync_cost=flags.sync_cost, area='lm', core_mask=lm_core_mask, t_start=0.2, t_end=0.5, n_samples=500, dtype=dtype, session='spont', data_dir='Synchronization_data')
+        v1_spont_sync_loss = losses.SynchronizationLoss(networks['v1'], sync_cost=flags.sync_cost, area='v1', core_mask=v1_core_mask, t_start=0.2, t_end=flags.seq_len/1000, n_samples=500, dtype=dtype, session='spont', data_dir='Synchronization_data')
+        lm_spont_sync_loss = losses.SynchronizationLoss(networks['lm'], sync_cost=flags.sync_cost, area='lm', core_mask=lm_core_mask, t_start=0.2, t_end=flags.seq_len/1000, n_samples=500, dtype=dtype, session='spont', data_dir='Synchronization_data')
         model.add_loss(lambda: v1_spont_sync_loss(rsnn_layer.output[0][0]) + lm_spont_sync_loss(rsnn_layer.output[0][2]))
 
         # Create an ExponentialMovingAverage object
@@ -302,8 +308,8 @@ def main(_):
                 lm_ema = tf.Variable(data_loaded['lm_ema'], trainable=False, name='LM_EMA')
         else:
             # 3 Hz is near the average FR of cortex
-            v1_ema = tf.Variable(tf.constant(0.003, shape=(v1_neurons,)), trainable=False, name='V1_EMA')
-            lm_ema = tf.Variable(tf.constant(0.003, shape=(lm_neurons,)), trainable=False, name='LM_EMA')
+            v1_ema = tf.Variable(tf.constant(0.003, shape=(v1_neurons,), dtype=dtype), trainable=False, name='V1_EMA')
+            lm_ema = tf.Variable(tf.constant(0.003, shape=(lm_neurons,), dtype=dtype), trainable=False, name='LM_EMA')
 
         # if training for spontaneous firing rates set the osi loss to 0
         if flags.spontaneous_training:
@@ -454,8 +460,6 @@ def main(_):
         # Update the EMAs
         v1_ema.assign(ema_decay * v1_ema + (1 - ema_decay) * v1_rates)
         lm_ema.assign(ema_decay * lm_ema + (1 - ema_decay) * lm_rates)
-        tf.print('V1_ema: ', tf.reduce_mean(v1_ema), tf.reduce_mean(v1_rates), v1_ema)
-        tf.print('lm_ema: ', tf.reduce_mean(lm_ema), tf.reduce_mean(lm_rates), lm_ema)
 
         v1_voltage_loss = v1_voltage_regularizer(_v1_v) # trim is irrelevant for this
         lm_voltage_loss = lm_voltage_regularizer(_lm_v) # trim is irrelevant for this
@@ -650,6 +654,7 @@ def main(_):
                 bmtk_compat=flags.bmtk_compat_lgn,
                 rotation=flags.rotation,
                 billeh_phase=True,
+                dtype=dtype
             ).batch(per_replica_batch_size)
                         
             return _data_set
@@ -665,6 +670,7 @@ def main(_):
                 rotation=flags.rotation,
                 billeh_phase=True,
                 return_firing_rates=True,
+                dtype=dtype
             ).batch(per_replica_batch_size)
                         
             return _lgn_firing_rates
@@ -674,8 +680,8 @@ def main(_):
     # test_data_set = strategy.distribute_datasets_from_function(get_dataset_fn(regular=True))   
     gray_data_set = strategy.distribute_datasets_from_function(get_gray_dataset_fn())
     gray_it = iter(gray_data_set)
-    y_spontaneous = tf.constant(0, dtype=tf.float32, shape=(1,1)) 
-    w_spontaneous = tf.constant(flags.seq_len, dtype=tf.float32, shape=(1,1))
+    y_spontaneous = tf.constant(0, dtype=dtype, shape=(1,1)) 
+    w_spontaneous = tf.constant(flags.seq_len, dtype=dtype, shape=(1,1))
     spontaneous_lgn_firing_rates = next(iter(gray_data_set))   
     spontaneous_lgn_firing_rates = tf.constant(spontaneous_lgn_firing_rates, dtype=dtype)
     # load LGN spontaneous firing rates 
@@ -683,7 +689,7 @@ def main(_):
 
     @tf.function(jit_compile=True)
     def generate_spontaneous_spikes(spontaneous_prob):
-        x_spontaneous = tf.random.uniform(tf.shape(spontaneous_prob)) < spontaneous_prob
+        x_spontaneous = tf.random.uniform(tf.shape(spontaneous_prob), dtype=dtype) < spontaneous_prob
         return x_spontaneous
     
     del gray_data_set, gray_it, spontaneous_lgn_firing_rates
@@ -956,6 +962,7 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_boolean('hard_reset', False, '')
     absl.app.flags.DEFINE_boolean('disconnect_lm_L6_inhibition', False, '')
     absl.app.flags.DEFINE_boolean('disconnect_v1_lm_L6_excitatory_projections', False, '')
+    absl.app.flags.DEFINE_boolean('random_weights', False, '')
     absl.app.flags.DEFINE_boolean('realistic_neurons_ratio', True, '')
     absl.app.flags.DEFINE_boolean('train_recurrent_v1', False, '')
     absl.app.flags.DEFINE_boolean('train_recurrent_lm', False, '')

@@ -68,7 +68,7 @@ def main(_):
     if logdir == '':
         flag_str = f'v1_{v1_neurons}_lm_{lm_neurons}'
         for name, value in flags.flag_values_dict().items():
-            if value != flags[name].default and name in ['n_input', 'core_only', 'connected_selection', 'interarea_weight_distribution', 'E4_weight_factor']:
+            if value != flags[name].default and name in ['n_input', 'core_only', 'connected_selection', 'interarea_weight_distribution', 'E4_weight_factor', 'random_weights']:
                 flag_str += f'_{name}_{value}'
         # Define flag string as the second part of results_path
         results_dir = f'{flags.results_dir}/{flag_str}'
@@ -91,6 +91,7 @@ def main(_):
         else:
             mixed_precision.set_global_policy('mixed_float16')
         dtype = tf.float16
+        print('Mixed precision enabled!')
     else:
         dtype = tf.float32
 
@@ -138,7 +139,7 @@ def main(_):
             bkg_inputs, 
             seq_len=flags.seq_len,
             n_input=flags.n_input, 
-            dtype=tf.float32, 
+            dtype=dtype, 
             input_weight_scale=flags.input_weight_scale,
             interarea_weight_scale=1., 
             recurrent_dampening_factor=flags.recurrent_dampening_factor,
@@ -172,7 +173,7 @@ def main(_):
 
         # Store the initial model variables that are going to be trained
         model_variables_dict = {'Initial': {var.name: var.numpy().astype(np.float16) for var in model.trainable_variables}}
-
+        
         # Define the optimizer
          # Define the optimizer
         if flags.optimizer == 'adam':
@@ -260,6 +261,7 @@ def main(_):
                         return_firing_rates=True,
                         rotation=flags.rotation,
                         billeh_phase=True,
+                        dtype=dtype
                     ).batch(1)
                                 
                     return _lgn_firing_rates
@@ -275,7 +277,7 @@ def main(_):
                 print(f'Angle {angle} done.')
                 print(f'    Trial running time: {time() - t0:.2f}s')
                 for gpu_id in range(len(strategy.extended.worker_devices)):
-                    mem_data = printgpu(gpu_id=gpu_id, verbose=1)
+                    printgpu(gpu_id=gpu_id)
                     print(f'    Memory consumption (current - peak) GPU {gpu_id}: {mem_data[0]:.2f} GB - {mem_data[1]:.2f} GB')
 
             # Save the dataset      
@@ -300,6 +302,7 @@ def main(_):
                     rotation=flags.rotation,
                     billeh_phase=True,
                     return_firing_rates=True,
+                    dtype=dtype
                 ).batch(per_replica_batch_size)
                             
                 return _lgn_firing_rates
@@ -314,7 +317,7 @@ def main(_):
         # load LGN spontaneous firing rates 
         spontaneous_prob = 1 - tf.exp(-spontaneous_lgn_firing_rates / 1000.)
         # Generate LGN spikes
-        x = tf.random.uniform(tf.shape(spontaneous_prob)) < spontaneous_prob
+        x = tf.random.uniform(tf.shape(spontaneous_prob), dtype=dtype) < spontaneous_prob
         # Run a gray simulation to get the model state
         tf.nest.map_structure(lambda a, b: a.assign(b), state_variables, zero_state)    
         _, _, gray_state = distributed_roll_out(x)
@@ -364,7 +367,7 @@ def main(_):
                 distributed_reset_state('gray', gray_state=gray_state)
 
                 # Generate LGN spikes
-                x = tf.random.uniform(tf.shape(_p)) < _p
+                x = tf.random.uniform(tf.shape(_p), dtype=dtype) < _p
                 chunk_size = flags.seq_len
                 num_chunks = (2500//chunk_size + 1)
                 for i in range(num_chunks):
@@ -382,8 +385,8 @@ def main(_):
                 print(f'Trial {trial_id+1}/{flags.n_trials_per_angle} - Angle {angle} done.')
                 print(f'    Trial running time: {time() - t0:.2f}s')
                 for gpu_id in range(len(strategy.extended.worker_devices)):
-                    mem_data = printgpu(gpu_id=gpu_id, verbose=1)
-                    print(f'    Memory consumption (current - peak) GPU {gpu_id}: {mem_data[0]:.2f} GB - {mem_data[1]:.2f} GB')
+                    printgpu(gpu_id=gpu_id)
+
                 if not flags.calculate_osi_dsi:
                     break
 
@@ -455,6 +458,7 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_boolean('hard_reset', False, '')
     absl.app.flags.DEFINE_boolean('disconnect_lm_L6_inhibition', False, '')
     absl.app.flags.DEFINE_boolean('disconnect_v1_lm_L6_excitatory_projections', False, '')
+    absl.app.flags.DEFINE_boolean('random_weights', False, '')
     absl.app.flags.DEFINE_boolean('realistic_neurons_ratio', False, '')
     absl.app.flags.DEFINE_boolean('train_recurrent_v1', False, '')
     absl.app.flags.DEFINE_boolean('train_recurrent_lm', False, '')

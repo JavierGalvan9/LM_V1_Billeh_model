@@ -41,15 +41,18 @@ class StiffRegularizer(Layer):
         if self._penalize_relative_change:
             epsilon = np.float32(1e-4)
             denominator = np.maximum(np.abs(initial_mean_weights), epsilon)
-            self._denominator = tf.constant(denominator, dtype=dtype)
+            self._denominator = tf.constant(denominator, dtype=tf.float32)
 
         self.idx = tf.constant(self.idx, dtype=tf.int32)
         self.num_unique = tf.constant(self.num_unique, dtype=tf.int32)
-        self._target_mean_weights = tf.constant(initial_mean_weights, dtype=dtype)
+        self._target_mean_weights = tf.constant(initial_mean_weights, dtype=tf.float32)
     
+    @tf.function(jit_compile=True)
     def __call__(self, x):
-        # if x.dtype != self._dtype:
-        #     x = tf.cast(x, self._dtype)
+
+        if len(x.shape) > 1 and x.shape[1] == 1:
+            x = tf.squeeze(x, axis=1)
+
         mean_edge_type_weights = tf.math.unsorted_segment_mean(x, self.idx, self.num_unique)
         if self._penalize_relative_change:
             # return self._strength * tf.reduce_mean(tf.abs(x - self._initial_value))
@@ -59,7 +62,7 @@ class StiffRegularizer(Layer):
         else:
             reg_loss = tf.reduce_mean(tf.square(mean_edge_type_weights - self._target_mean_weights))
         
-        return reg_loss * self._strength
+        return tf.cast(reg_loss, dtype=self._dtype) * self._strength
 
 
 class L2Regularizer(tf.keras.regularizers.Regularizer):
@@ -90,13 +93,18 @@ class L2Regularizer(tf.keras.regularizers.Regularizer):
             unique_edge_type_ids, inverse_indices = np.unique(edge_type_ids, return_inverse=True)
             mean_weights = np.array([np.mean(initial_value[edge_type_ids == edge_type_id]) for edge_type_id in unique_edge_type_ids])
             # Create target mean weights array based on the edge type indices
-            self._target_mean_weights = tf.constant(mean_weights[inverse_indices], dtype=self._dtype)
+            self._target_mean_weights = tf.constant(mean_weights[inverse_indices], dtype=tf.float32)
             epsilon = tf.constant(1e-4, dtype=tf.float32)  # A small constant to avoid division by zero
             self._target_mean_weights = tf.maximum(tf.abs(self._target_mean_weights), epsilon)
         else:
             self._target_mean_weights = None
 
+    @tf.function(jit_compile=True)
     def __call__(self, x):
+
+        if len(x.shape) > 1 and x.shape[1] == 1:
+            x = tf.squeeze(x, axis=1)
+            
         if self._target_mean_weights is None:
             return self._strength * tf.reduce_mean(tf.square(x))
         else:
@@ -337,8 +345,8 @@ class SynchronizationLoss(Layer):
         experimental_data_path = os.path.join(data_dir, f'Fano_factor_{self._area}', f'{self._area}_fano_running_300ms_{session}.npy')
         experimental_fanos = np.load(experimental_data_path, allow_pickle=True)
         # Calculate mean, standard deviation, and SEM of the Fano factors
-        experimental_fanos_mean = np.nanmean(experimental_fanos, axis=0)
-        self.experimental_fanos_mean = tf.constant(experimental_fanos_mean[bin_sizes_mask], dtype=self._dtype)
+        experimental_fanos_mean = np.nanmean(experimental_fanos[:, bin_sizes_mask], axis=0)
+        self.experimental_fanos_mean = tf.constant(experimental_fanos_mean, dtype=self._dtype)
 
     def pop_fano_tf(self, spikes, bin_sizes):
         # transpose the spikes tensor to have the shape (seq_len, samples)
@@ -494,7 +502,7 @@ class SynchronizationRegularization(Layer):
             centered_spikes = tf.boolean_mask(centered_spikes, valid_neurons, axis=0)
             # if tf.shape(centered_spikes)[0] > 1:  # Ensure there are at least two neurons to correlate
                 # Calculate pairwise correlations
-            correlation_matrix = tf.linalg.matmul(centered_spikes, centered_spikes, transpose_b=True) / tf.cast(new_seq_len, tf.float32)
+            correlation_matrix = tf.linalg.matmul(centered_spikes, centered_spikes, transpose_b=True) / tf.cast(new_seq_len, self._dtype)
             # Normalize the correlation matrices to get correlation coefficients
             norms = tf.sqrt(tf.linalg.diag_part(correlation_matrix))
             correlation_matrix = correlation_matrix / (tf.expand_dims(norms, 1) * tf.expand_dims(norms, 0))
@@ -508,7 +516,7 @@ class SynchronizationRegularization(Layer):
             mean_correlation = tf.reduce_mean(tf.gather_nd(correlation_matrix, upper_triangle_indices))
             # mean_pairwise_correlations.append(mean_correlation)
             mean_pairwise_correlations = mean_pairwise_correlations + mean_correlation
-        mean_pairwise_correlations = mean_pairwise_correlations / tf.cast(batch_size, tf.float32)
+        mean_pairwise_correlations = mean_pairwise_correlations / tf.cast(batch_size, self._dtype)
 
         return mean_pairwise_correlations
  
@@ -686,7 +694,7 @@ class OrientationSelectivityLoss:
 
         return model_fr
     
-    def neuropixels_fr_loss(self, spikes, angle, trim=True):
+    def neuropixels_fr_loss(self, spikes, angle):
         # if the trget fr is not set, construct them
         if not hasattr(self, "_target_frs"):
 
@@ -701,10 +709,9 @@ class OrientationSelectivityLoss:
                 self._target_frs[key] = self.vonmises_model_fr(structure, key)
                 # TODO: convert it to tensor if needed.
 
-        spikes = spike_trimming(spikes, pre_delay=self._pre_delay, post_delay=self._post_delay, trim=trim)
         # assuming 1 ms bins
         spike_rates = tf.reduce_mean(spikes, axis=[0, 1]) / spikes.shape[1] * 1000
-        angle_bins = tf.constant(np.arange(-90, 91, 10), dtype=tf.float32)
+        angle_bins = tf.constant(np.arange(-90, 91, 10), dtype=self._dtype)
         nbins = angle_bins.shape[0] - 1
         # now, process each layer
         # losses = tf.TensorArray(tf.float32, size=len(self._layer_info))
@@ -746,14 +753,12 @@ class OrientationSelectivityLoss:
 
         return final_loss
 
-    def crowd_spikes_loss(self, spikes, angle, trim=True):
+    def crowd_spikes_loss(self, spikes, angle):
         # I need to access the tuning angle. of all the neurons.
         angle = tf.cast(angle, self._dtype)
 
         if self._core_mask is not None:
             spikes = tf.boolean_mask(spikes, self._core_mask, axis=2)
-
-        spikes = spike_trimming(spikes, pre_delay=self._pre_delay, post_delay=self._post_delay, trim=trim)
 
         delta_angle = self.calculate_delta_angle(angle, self._tuning_angles)
         # sum spikes in _z, and multiply with delta_angle.
@@ -767,7 +772,7 @@ class OrientationSelectivityLoss:
 
         return angle_loss * self._osi_cost
 
-    def crowd_osi_loss(self, spikes, angle, trim=True, normalizer=None):  
+    def crowd_osi_loss(self, spikes, angle, normalizer=None):  
         # Calculate the angle deltas between current angle and tuning angle
         angle = tf.cast(angle[0][0], self._dtype) 
         delta_angle = tf.expand_dims(angle, axis=0) - self._tuning_angles
@@ -775,7 +780,6 @@ class OrientationSelectivityLoss:
         # delta_angle = tf.math.floormod(delta_angle, 360)
         radians_delta_angle = delta_angle * (pi / 180)
             
-        spikes = spike_trimming(spikes, pre_delay=self._pre_delay, post_delay=self._post_delay, trim=trim)
         # sum spikes in _z, and multiply with delta_angle.
         rates = tf.reduce_mean(spikes, axis=[0, 1])
 
@@ -808,9 +812,12 @@ class OrientationSelectivityLoss:
         return (total_osi_loss + total_dsi_loss) * self._osi_cost
 
     def __call__(self, spikes, angle, trim, normalizer=None):
+
+        spikes = spike_trimming(spikes, pre_delay=self._pre_delay, post_delay=self._post_delay, trim=trim)
+
         if self._method == "crowd_osi":
-            return self.crowd_osi_loss(spikes, angle, trim, normalizer=normalizer)
+            return self.crowd_osi_loss(spikes, angle, normalizer=normalizer)
         elif self._method == "crowd_spikes":
-            return self.crowd_spikes_loss(spikes, angle, trim)
+            return self.crowd_spikes_loss(spikes, angle)
         elif self._method == "neuropixels_fr":
-            return self.neuropixels_fr_loss(spikes, angle, trim)
+            return self.neuropixels_fr_loss(spikes, angle)

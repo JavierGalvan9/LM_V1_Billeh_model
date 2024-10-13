@@ -385,7 +385,13 @@ class InterareaConnectivity:
                         synaptic_weights, synaptic_delays, receptor_ids, edge_type_ids = self.assign_weight_and_delay(source, target,
                                                                                                         src_tf_ids, tgt_tf_ids,
                                                                                                         nsyns_ret)
-                        synaptic_weights = np.zeros(n_connections)                                                                                                                                          
+                        synaptic_weights = np.zeros(n_connections)   
+                    elif self.interarea_weight_distribution == 'random_weights':
+                        synaptic_weights, synaptic_delays, receptor_ids, edge_type_ids = self.assign_weight_and_delay(source, target,
+                                                                                                        src_tf_ids, tgt_tf_ids,
+                                                                                                        nsyns_ret)
+                        # synaptic_weights = np.sign(synaptic_weights) * np.abs(self.rd.normal(loc=np.mean(synaptic_weights), scale=np.std(synaptic_weights), size=synaptic_weights.size))                                                                                                                                   
+                        np.random.shuffle(synaptic_weights)
                     elif self.interarea_weight_distribution == 'disconnected':
                         synaptic_weights = np.zeros(n_connections)
                         synaptic_delays = np.ones(n_connections)  
