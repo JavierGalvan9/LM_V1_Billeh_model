@@ -106,11 +106,11 @@ class L2Regularizer(tf.keras.regularizers.Regularizer):
             x = tf.squeeze(x, axis=1)
             
         if self._target_mean_weights is None:
-            return self._strength * tf.reduce_mean(tf.square(x))
+            return tf.cast(self._strength * tf.reduce_mean(tf.square(x)), dtype=self._dtype)
         else:
             relative_deviation = x / self._target_mean_weights
             mse = self._strength * tf.reduce_mean(tf.square(relative_deviation))
-            return mse
+            return tf.cast(mse, dtype=self._dtype)
 
 
 def spike_trimming(spikes, pre_delay=50, post_delay=50, trim=True):
@@ -588,6 +588,7 @@ class OrientationSelectivityLoss:
         self._core_mask = core_mask
         self._method = method
         self._subtraction_ratio = subtraction_ratio # only for crowd_spikes method
+        self._tf_pi = tf.constant(np.pi, dtype=dtype)
         if (self._core_mask is not None) and (self._method == "crowd_spikes" or self._method == "crowd_osi"):
             # tuning_angles = network['tuning_angle']
             self.np_core_mask = self._core_mask.numpy()
@@ -778,7 +779,7 @@ class OrientationSelectivityLoss:
         delta_angle = tf.expand_dims(angle, axis=0) - self._tuning_angles
         # i want the delta_angle to be within 0-360
         # delta_angle = tf.math.floormod(delta_angle, 360)
-        radians_delta_angle = delta_angle * (pi / 180)
+        radians_delta_angle = delta_angle * (self._tf_pi / 180)
             
         # sum spikes in _z, and multiply with delta_angle.
         rates = tf.reduce_mean(spikes, axis=[0, 1])

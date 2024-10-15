@@ -2,7 +2,7 @@ import os
 
 # Define the environment variables for optimal GPU performance
 os.environ['TF_GPU_THREAD_MODE'] = 'gpu_private'
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' # before import tensorflow
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0' # before import tensorflow
 os.environ['TF_GPU_ALLOCATOR'] = 'cuda_malloc_async'
 # os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
 
@@ -87,16 +87,13 @@ def main(_):
         flag_str = logdir.split(os.path.sep)[-2]
 
     # Can be used to try half precision training
-    if flags.float16:
-        # policy = mixed_precision.Policy("mixed_float16")
-        # mixed_precision.set_policy(policy)
+    if flags.dtype=='float16':
         if version.parse(tf.__version__) < version.parse("2.4.0"):
             policy = mixed_precision.Policy("mixed_float16")
             mixed_precision.set_policy(policy)
         else:
             mixed_precision.set_global_policy('mixed_float16')
         dtype = tf.float16
-        print('Mixed precision enabled!')
     else:
         dtype = tf.float32
 
@@ -185,7 +182,6 @@ def main(_):
             print(f"Invalid optimizer: {flags.optimizer}")
             raise ValueError
         
-        # optimizer = mixed_precision.LossScaleOptimizer(base_optimizer) # If suffering from underflow gradients when using tf.float16 (not the case here)
         optimizer.build(model.trainable_variables)
 
         # Restore model and optimizer from a checkpoint if it exists
@@ -234,6 +230,10 @@ def main(_):
             print(f"No checkpoint found in {flags.ckpt_dir} or {flags.restore_from}. Starting from scratch...\n")
             checkpoint = None
 
+        #Enable loss scaling for training float16 model
+        if flags.dtype == 'float16':
+            optimizer = mixed_precision.LossScaleOptimizer(optimizer) # to prevent suffering from underflow gradients when using tf.float16
+
         model_variables_dict['Best'] =  {var.name: var.numpy().astype(np.float16) for var in model.trainable_variables}
         print(f"Model variables stored in dictionary\n")
         # print(model_variables_dict)
@@ -253,9 +253,9 @@ def main(_):
         rsnn_layer = model.get_layer('rsnn')
         
         ### RECURRENT REGULARIZERS ###
-        v1_recurrent_regularizer = losses.StiffRegularizer(flags.recurrent_weight_regularization, networks['v1'], penalize_relative_change=True, dtype=dtype)
+        v1_recurrent_regularizer = losses.StiffRegularizer(flags.recurrent_weight_regularization, networks['v1'], penalize_relative_change=True, dtype=tf.float32)
         model.add_loss(lambda: v1_recurrent_regularizer(rsnn_layer.cell.v1.recurrent_weight_values))
-        lm_recurrent_regularizer = losses.StiffRegularizer(flags.recurrent_weight_regularization, networks['lm'], penalize_relative_change=True, dtype=dtype)
+        lm_recurrent_regularizer = losses.StiffRegularizer(flags.recurrent_weight_regularization, networks['lm'], penalize_relative_change=True, dtype=tf.float32)
         model.add_loss(lambda: lm_recurrent_regularizer(rsnn_layer.cell.lm.recurrent_weight_values))
 
         # # ### INTERAREA REGULARIZERS ###
@@ -266,35 +266,35 @@ def main(_):
 
         ### EVOKED RATES REGULARIZERS ###
         v1_evoked_rate_regularizer = losses.SpikeRateDistributionTarget(networks['v1'], spontaneous_fr=False, rate_cost=flags.rate_cost, pre_delay=delays[0], post_delay=delays[1], 
-                                                                            data_dir=flags.data_dir, area='v1', core_mask=v1_core_mask, seed=flags.seed, dtype=dtype)
+                                                                            data_dir=flags.data_dir, area='v1', core_mask=v1_core_mask, seed=flags.seed, dtype=tf.float32)
         model.add_loss(lambda: v1_evoked_rate_regularizer(rsnn_layer.output[0][0]))
         lm_evoked_rate_regularizer = losses.SpikeRateDistributionTarget(networks['lm'], spontaneous_fr=False, rate_cost=flags.rate_cost, pre_delay=delays[0], post_delay=delays[1], 
-                                                                            data_dir=flags.data_dir, area='lm', core_mask=lm_core_mask, seed=flags.seed, dtype=dtype)
+                                                                            data_dir=flags.data_dir, area='lm', core_mask=lm_core_mask, seed=flags.seed, dtype=tf.float32)
         model.add_loss(lambda: lm_evoked_rate_regularizer(rsnn_layer.output[0][2]))
         
         ### SPONTANEOUS RATES REGULARIZERS ###
         v1_spont_rate_regularizer = losses.SpikeRateDistributionTarget(networks['v1'], spontaneous_fr=True, rate_cost=flags.rate_cost, pre_delay=delays[0], post_delay=delays[1], 
-                                                                            data_dir=flags.data_dir, area='v1', core_mask=v1_core_mask, seed=flags.seed, dtype=dtype)
+                                                                            data_dir=flags.data_dir, area='v1', core_mask=v1_core_mask, seed=flags.seed, dtype=tf.float32)
         model.add_loss(lambda: v1_spont_rate_regularizer(rsnn_layer.output[0][0]))
         lm_spont_rate_regularizer = losses.SpikeRateDistributionTarget(networks['lm'], spontaneous_fr=True, rate_cost=flags.rate_cost, pre_delay=delays[0], post_delay=delays[1], 
-                                                                            data_dir=flags.data_dir, area='lm', core_mask=lm_core_mask, seed=flags.seed, dtype=dtype)
+                                                                            data_dir=flags.data_dir, area='lm', core_mask=lm_core_mask, seed=flags.seed, dtype=tf.float32)
         model.add_loss(lambda: lm_spont_rate_regularizer(rsnn_layer.output[0][2]))
 
         ### VOLTAGE REGULARIZERS ###
-        v1_voltage_regularizer = losses.VoltageRegularization(rsnn_layer.cell.v1, area='v1', voltage_cost=flags.voltage_cost, dtype=dtype) #, core_mask=v1_core_mask)
-        lm_voltage_regularizer = losses.VoltageRegularization(rsnn_layer.cell.lm, area='lm', voltage_cost=flags.voltage_cost, dtype=dtype) #, core_mask=lm_core_mask)
+        v1_voltage_regularizer = losses.VoltageRegularization(rsnn_layer.cell.v1, area='v1', voltage_cost=flags.voltage_cost, dtype=tf.float32) #, core_mask=v1_core_mask)
+        lm_voltage_regularizer = losses.VoltageRegularization(rsnn_layer.cell.lm, area='lm', voltage_cost=flags.voltage_cost, dtype=tf.float32) #, core_mask=lm_core_mask)
         model.add_loss(lambda: v1_voltage_regularizer(rsnn_layer.output[0][1]) + lm_voltage_regularizer(rsnn_layer.output[0][3]))
 
         ### SYNCHRONIZATION REGULARIZERS ###
         # v1_sync_regularizer = losses.SynchronizationLoss(sync_cost=flags.sync_cost, target_sync=0., area='v1', core_mask=v1_core_mask, pre_delay=delays[0], post_delay=delays[1], dtype=dtype)
         # lm_sync_regularizer = losses.SynchronizationLoss(sync_cost=flags.sync_cost, target_sync=0., area='lm', core_mask=lm_core_mask, pre_delay=delays[0], post_delay=delays[1], dtype=dtype)
         # model.add_loss(lambda: v1_sync_regularizer(rsnn_layer.output[0][0]) + lm_sync_regularizer(rsnn_layer.output[0][2]))
-        v1_evoked_sync_loss = losses.SynchronizationLoss(networks['v1'], sync_cost=flags.sync_cost, area='v1', core_mask=v1_core_mask, t_start=0.2, t_end=flags.seq_len/1000, n_samples=500, dtype=dtype, session='evoked', data_dir='Synchronization_data')
-        lm_evoked_sync_loss = losses.SynchronizationLoss(networks['lm'], sync_cost=flags.sync_cost, area='lm', core_mask=lm_core_mask, t_start=0.2, t_end=flags.seq_len/1000, n_samples=500, dtype=dtype, session='evoked', data_dir='Synchronization_data')
+        v1_evoked_sync_loss = losses.SynchronizationLoss(networks['v1'], sync_cost=flags.sync_cost, area='v1', core_mask=v1_core_mask, t_start=0.2, t_end=0.5, n_samples=500, dtype=dtype, session='evoked', data_dir='Synchronization_data')
+        lm_evoked_sync_loss = losses.SynchronizationLoss(networks['lm'], sync_cost=flags.sync_cost, area='lm', core_mask=lm_core_mask, t_start=0.2, t_end=0.5, n_samples=500, dtype=dtype, session='evoked', data_dir='Synchronization_data')
         model.add_loss(lambda: v1_evoked_sync_loss(rsnn_layer.output[0][0]) + lm_evoked_sync_loss(rsnn_layer.output[0][2]))
 
-        v1_spont_sync_loss = losses.SynchronizationLoss(networks['v1'], sync_cost=flags.sync_cost, area='v1', core_mask=v1_core_mask, t_start=0.2, t_end=flags.seq_len/1000, n_samples=500, dtype=dtype, session='spont', data_dir='Synchronization_data')
-        lm_spont_sync_loss = losses.SynchronizationLoss(networks['lm'], sync_cost=flags.sync_cost, area='lm', core_mask=lm_core_mask, t_start=0.2, t_end=flags.seq_len/1000, n_samples=500, dtype=dtype, session='spont', data_dir='Synchronization_data')
+        v1_spont_sync_loss = losses.SynchronizationLoss(networks['v1'], sync_cost=flags.sync_cost, area='v1', core_mask=v1_core_mask, t_start=0.2, t_end=0.5, n_samples=500, dtype=dtype, session='spont', data_dir='Synchronization_data')
+        lm_spont_sync_loss = losses.SynchronizationLoss(networks['lm'], sync_cost=flags.sync_cost, area='lm', core_mask=lm_core_mask, t_start=0.2, t_end=0.5, n_samples=500, dtype=dtype, session='spont', data_dir='Synchronization_data')
         model.add_loss(lambda: v1_spont_sync_loss(rsnn_layer.output[0][0]) + lm_spont_sync_loss(rsnn_layer.output[0][2]))
 
         # Create an ExponentialMovingAverage object
@@ -308,8 +308,8 @@ def main(_):
                 lm_ema = tf.Variable(data_loaded['lm_ema'], trainable=False, name='LM_EMA')
         else:
             # 3 Hz is near the average FR of cortex
-            v1_ema = tf.Variable(tf.constant(0.003, shape=(v1_neurons,), dtype=dtype), trainable=False, name='V1_EMA')
-            lm_ema = tf.Variable(tf.constant(0.003, shape=(lm_neurons,), dtype=dtype), trainable=False, name='LM_EMA')
+            v1_ema = tf.Variable(tf.constant(0.003, shape=(v1_neurons,)), trainable=False, name='V1_EMA')
+            lm_ema = tf.Variable(tf.constant(0.003, shape=(lm_neurons,)), trainable=False, name='LM_EMA')
 
         # if training for spontaneous firing rates set the osi loss to 0
         if flags.spontaneous_training:
@@ -328,19 +328,19 @@ def main(_):
         ### OSI / DSI LOSSES ###
         v1_OSI_DSI_Loss = losses.OrientationSelectivityLoss(network=networks['v1'], osi_cost=osi_cost, area='v1',
                                                         pre_delay=delays[0], post_delay=delays[1], 
-                                                        dtype=dtype, core_mask=v1_core_mask,
+                                                        dtype=tf.float32, core_mask=v1_core_mask,
                                                         # dtype=dtype, core_mask=None,
                                                         method=flags.osi_loss_method,
                                                         subtraction_ratio=flags.osi_loss_subtraction_ratio,
                                                         layer_info=v1_layer_info)
         lm_OSI_DSI_Loss = losses.OrientationSelectivityLoss(network=networks['lm'], osi_cost=osi_cost, area='lm',
                                                         pre_delay=delays[0], post_delay=delays[1], 
-                                                        dtype=dtype, core_mask=lm_core_mask,
+                                                        dtype=tf.float32, core_mask=lm_core_mask,
                                                         # dtype=dtype, core_mask=None,
                                                         method=flags.osi_loss_method,
                                                         subtraction_ratio=flags.osi_loss_subtraction_ratio,
                                                         layer_info=lm_layer_info)
-        placeholder_angle = tf.constant(0, dtype=dtype, shape=(1, 1))
+        placeholder_angle = tf.constant(0, dtype=tf.float32, shape=(1, 1))
         model.add_loss(lambda: v1_OSI_DSI_Loss(rsnn_layer.output[0][0], placeholder_angle, trim=True, normalizer=v1_ema) \
                             + lm_OSI_DSI_Loss(rsnn_layer.output[0][2], placeholder_angle, trim=True, normalizer=lm_ema))
 
@@ -349,34 +349,34 @@ def main(_):
             # Add rate regularizer for the annulus
             v1_annulus_mask = ~v1_core_mask
             v1_annulus_spont_rate_regularizer = losses.SpikeRateDistributionTarget(networks['v1'], spontaneous_fr=True, rate_cost=0.1*flags.rate_cost, pre_delay=delays[0], post_delay=delays[1],
-                                                                                    data_dir=flags.data_dir, area='v1', core_mask=v1_annulus_mask, rates_dampening=1., seed=flags.seed, dtype=dtype)
+                                                                                    data_dir=flags.data_dir, area='v1', core_mask=v1_annulus_mask, rates_dampening=1., seed=flags.seed, dtype=tf.float32)
             model.add_loss(lambda: v1_annulus_spont_rate_regularizer(rsnn_layer.output[0][0]))
             v1_annulus_evoked_rate_regularizer = losses.SpikeRateDistributionTarget(networks['v1'], spontaneous_fr=False, rate_cost=0.1*flags.rate_cost, pre_delay=delays[0], post_delay=delays[1],
-                                                                                    data_dir=flags.data_dir, area='v1', core_mask=v1_annulus_mask, rates_dampening=1., seed=flags.seed, dtype=dtype)
+                                                                                    data_dir=flags.data_dir, area='v1', core_mask=v1_annulus_mask, rates_dampening=1., seed=flags.seed, dtype=tf.float32)
             model.add_loss(lambda: v1_annulus_evoked_rate_regularizer(rsnn_layer.output[0][0]))
             # Add rate regularizer for the annulus
             lm_annulus_mask = ~lm_core_mask
             lm_annulus_spont_rate_regularizer = losses.SpikeRateDistributionTarget(networks['lm'], spontaneous_fr=True, rate_cost=0.1*flags.rate_cost, pre_delay=delays[0], post_delay=delays[1],
-                                                                                data_dir=flags.data_dir, area='lm', core_mask=lm_annulus_mask, rates_dampening=1., seed=flags.seed, dtype=dtype)
+                                                                                data_dir=flags.data_dir, area='lm', core_mask=lm_annulus_mask, rates_dampening=1., seed=flags.seed, dtype=tf.float32)
             model.add_loss(lambda: lm_annulus_spont_rate_regularizer(rsnn_layer.output[0][2]))
             lm_annulus_evoked_rate_regularizer = losses.SpikeRateDistributionTarget(networks['lm'], spontaneous_fr=False, rate_cost=0.1*flags.rate_cost, pre_delay=delays[0], post_delay=delays[1],
-                                                                                data_dir=flags.data_dir, area='lm', core_mask=lm_annulus_mask, rates_dampening=1., seed=flags.seed, dtype=dtype)
+                                                                                data_dir=flags.data_dir, area='lm', core_mask=lm_annulus_mask, rates_dampening=1., seed=flags.seed, dtype=tf.float32)
             model.add_loss(lambda: lm_annulus_evoked_rate_regularizer(rsnn_layer.output[0][2]))
             # Add OSI/DSI regularizer for the annulus
             v1_annulus_OSI_DSI_Loss = losses.OrientationSelectivityLoss(network=networks['v1'], osi_cost=0.1*osi_cost, area='v1',
                                                                         pre_delay=delays[0], post_delay=delays[1], 
-                                                                        dtype=dtype, core_mask=v1_annulus_mask,
+                                                                        dtype=tf.float32, core_mask=v1_annulus_mask,
                                                                         method=flags.osi_loss_method,
                                                                         subtraction_ratio=flags.osi_loss_subtraction_ratio,
                                                                         layer_info=v1_layer_info)
             # Add OSI/DSI regularizer for the annulus
             lm_annulus_OSI_DSI_Loss = losses.OrientationSelectivityLoss(network=networks['lm'], osi_cost=0.1*osi_cost, area='lm',
                                                                         pre_delay=delays[0], post_delay=delays[1], 
-                                                                        dtype=dtype, core_mask=lm_annulus_mask,
+                                                                        dtype=tf.float32, core_mask=lm_annulus_mask,
                                                                         method=flags.osi_loss_method,
                                                                         subtraction_ratio=flags.osi_loss_subtraction_ratio,
                                                                         layer_info=lm_layer_info)
-            placeholder_angle = tf.constant(0, dtype=dtype, shape=(1, 1))
+            placeholder_angle = tf.constant(0, dtype=tf.float32, shape=(1, 1))
             model.add_loss(lambda: v1_annulus_OSI_DSI_Loss(rsnn_layer.output[0][0], placeholder_angle, trim=True, normalizer=v1_ema) \
                                 + lm_annulus_OSI_DSI_Loss(rsnn_layer.output[0][2], placeholder_angle, trim=True, normalizer=lm_ema))
 
@@ -430,16 +430,6 @@ def main(_):
             val_rate_loss.reset_states(), val_voltage_loss.reset_states(), val_regularizer_loss.reset_states(), 
             val_osi_dsi_loss.reset_states(), val_sync_loss.reset_states()
 
-
-    # def spike_trimming(spikes, pre_delay=50, post_delay=50, trim=True):
-    #     pre = pre_delay or 0
-    #     if trim:
-    #         post = -post_delay if post_delay else None
-    #         spikes = spikes[:, pre:post, :]
-    #     else:
-    #         spikes = spikes[:, pre:, :]
-    #     return spikes
-
     def roll_out(_x, _y, _w, spontaneous=False, trim=True):
         _initial_state = tf.nest.map_structure(lambda _a: _a.read_value(), state_variables)
         # Access initial state values directly
@@ -448,6 +438,13 @@ def main(_):
         dummy_zeros = tf.zeros((flags.batch_size, seq_len, n_total_neurons), dtype)
         _out, _p, _, _bkg_noise = extractor_model((_x, dummy_zeros, _initial_state))
         _v1_z, _v1_v, _lm_z, _lm_v = _out[0]
+
+        if flags.dtype == 'float16':
+            _v1_z = tf.cast(_v1_z, tf.float32)
+            _v1_v = tf.cast(_v1_v, tf.float32)
+            _lm_z = tf.cast(_lm_z, tf.float32)
+            _lm_v = tf.cast(_lm_v, tf.float32)
+
         # update state_variables with the new model state
         new_state = tuple(_out[1:])
         tf.nest.map_structure(lambda a, b: a.assign(b), state_variables, new_state)
@@ -469,7 +466,7 @@ def main(_):
             v1_rate_loss = v1_spont_rate_regularizer(_v1_z, trim) #+ v1_spont_rate_regularizer(_v1_z, trim, uniform_distribution_constraint=True)
             lm_rate_loss = lm_spont_rate_regularizer(_lm_z, trim) #+ lm_spont_rate_regularizer(_lm_z, trim, uniform_distribution_constraint=True)
             rate_loss = v1_rate_loss + lm_rate_loss
-            osi_dsi_loss = tf.constant(0.0, dtype=dtype)
+            osi_dsi_loss = tf.constant(0.0, dtype=tf.float32)
             v1_recurrent_stiff_regularizer = v1_recurrent_regularizer(rsnn_layer.cell.v1.recurrent_weight_values)
             lm_recurrent_stiff_regularizer = lm_recurrent_regularizer(rsnn_layer.cell.lm.recurrent_weight_values)
             # v1_lm_weights_l2_regularizer = v1_lm_regularizer(rsnn_layer.cell.v1.interarea_weight_values['lm'])
@@ -479,8 +476,8 @@ def main(_):
             v1_sync_loss = v1_spont_sync_loss(_v1_z, trim)
             lm_sync_loss = lm_spont_sync_loss(_lm_z, trim)
             sync_loss = v1_sync_loss + lm_sync_loss
-            tf.print('V1 spont sync loss: ', v1_sync_loss)
-            tf.print('LM spont sync loss: ', lm_sync_loss)
+            # tf.print('V1 spont sync loss: ', v1_sync_loss)
+            # tf.print('LM spont sync loss: ', lm_sync_loss)
         else:
             # Compute the final term only after the first three terms have been computed
             v1_rate_loss = v1_evoked_rate_regularizer(_v1_z, trim)
@@ -489,12 +486,12 @@ def main(_):
             v1_osi_dsi_loss = v1_OSI_DSI_Loss(_v1_z, _y, trim, normalizer=v1_ema)
             lm_osi_dsi_loss = lm_OSI_DSI_Loss(_lm_z, _y, trim, normalizer=lm_ema)
             osi_dsi_loss = v1_osi_dsi_loss + lm_osi_dsi_loss
-            regularizers_loss = tf.constant(0.0, dtype=dtype)
+            regularizers_loss = tf.constant(0.0, dtype=tf.float32)
             v1_sync_loss = v1_evoked_sync_loss(_v1_z, trim)
             lm_sync_loss = lm_evoked_sync_loss(_lm_z, trim)
             sync_loss = v1_sync_loss + lm_sync_loss
-            tf.print('V1 evoked sync loss: ', v1_sync_loss)
-            tf.print('LM evoked sync loss: ', lm_sync_loss)
+            # tf.print('V1 evoked sync loss: ', v1_sync_loss)
+            # tf.print('LM evoked sync loss: ', lm_sync_loss)
 
         # compute the annulus rate loss
         if flags.core_loss and v1_neurons > 51978:
@@ -510,12 +507,12 @@ def main(_):
                 osi_dsi_loss += v1_annulus_osi_dsi_loss + lm_annulus_osi_dsi_loss
 
             rate_loss += v1_annulus_rate_loss + lm_annulus_rate_loss
-            tf.print('Annulus rate loss: ', v1_annulus_rate_loss, lm_annulus_rate_loss)
-            tf.print('Core rate loss: ', v1_rate_loss, lm_rate_loss)
+            # tf.print('Annulus rate loss: ', v1_annulus_rate_loss, lm_annulus_rate_loss)
+            # tf.print('Core rate loss: ', v1_rate_loss, lm_rate_loss)
             
         _aux = dict(rate_loss=rate_loss, voltage_loss=voltage_loss, regularizer_loss=regularizers_loss, osi_dsi_loss=osi_dsi_loss, sync_loss=sync_loss) 
         _loss = rate_loss + voltage_loss + osi_dsi_loss + regularizers_loss + sync_loss
-        tf.print(osi_dsi_loss, rate_loss, voltage_loss, regularizers_loss, sync_loss) #, interarea_weights_l2_regularizer*100, recurrent_weights_regularizer/100)
+        # tf.print(osi_dsi_loss, rate_loss, voltage_loss, regularizers_loss, sync_loss) #, interarea_weights_l2_regularizer*100, recurrent_weights_regularizer/100)
         return _out, _p, _loss, _aux, None
     
     @tf.function
@@ -531,8 +528,16 @@ def main(_):
         ### Forward propagation of the model
         with tf.GradientTape() as tape:
             _out, _p, _loss, _aux, _ = roll_out(_x, _y, _w, trim=trim, spontaneous=spontaneous)
+            # Scale the loss for float16         
+            if flags.dtype=='float16':
+                _scaled_loss = optimizer.get_scaled_loss(_loss)
 
-        grad = tape.gradient(_loss, model.trainable_variables)
+        if flags.dtype=='float16':
+            scaled_gradients = tape.gradient(_scaled_loss, model.trainable_variables)
+            grad = optimizer.get_unscaled_gradients(scaled_gradients)
+        else:
+            grad = tape.gradient(_loss, model.trainable_variables)
+            
         # for g, v in zip(grad, model.trainable_variables):
         #     tf.print(f'Spontaneous {v.name}: ', 'Loss, total_gradients : ', _loss, tf.reduce_sum(tf.math.abs(g)))
         #     _op = optimizer.apply_gradients([(g, v)])
@@ -580,8 +585,8 @@ def main(_):
         with tf.control_dependencies([_op]):
             _op = train_sync_loss.update_state(_aux_gratings['sync_loss'] + _aux_spontaneous['sync_loss'])    
 
-        tf.print("Train Loss:", train_loss.result(), _loss, ' - ', _y, tf.reduce_sum(tf.cast(_x, tf.float32)))  
-        tf.print(model.trainable_variables)
+        # tf.print("Train Loss:", train_loss.result(), _loss, ' - ', _y, tf.reduce_sum(tf.cast(_x, tf.float32)))  
+        # tf.print(model.trainable_variables)
 
         v1_spikes = _out_gratings[0][0]
         lm_spikes = _out_gratings[0][2]
@@ -683,11 +688,11 @@ def main(_):
     y_spontaneous = tf.constant(0, dtype=dtype, shape=(1,1)) 
     w_spontaneous = tf.constant(flags.seq_len, dtype=dtype, shape=(1,1))
     spontaneous_lgn_firing_rates = next(iter(gray_data_set))   
-    spontaneous_lgn_firing_rates = tf.constant(spontaneous_lgn_firing_rates, dtype=dtype)
+    # spontaneous_lgn_firing_rates = tf.constant(spontaneous_lgn_firing_rates, dtype=dtype)
     # load LGN spontaneous firing rates 
     spontaneous_prob = 1 - tf.exp(-spontaneous_lgn_firing_rates / 1000.)
 
-    @tf.function(jit_compile=True)
+    @tf.function
     def generate_spontaneous_spikes(spontaneous_prob):
         x_spontaneous = tf.random.uniform(tf.shape(spontaneous_prob), dtype=dtype) < spontaneous_prob
         return x_spontaneous
@@ -712,7 +717,7 @@ def main(_):
         else:
             raise ValueError(f"Invalid reset_type: {reset_type}")
 
-    @tf.function
+    # @tf.function
     def distributed_reset_state(reset_type, gray_state=None):
         if reset_type == 'gray':
             if gray_state is None:
@@ -914,6 +919,7 @@ if __name__ == '__main__':
     # absl.app.flags.DEFINE_string('interarea_weight_distribution', 'zero_weights', '')
     absl.app.flags.DEFINE_string('delays', '100,0', '')
     absl.app.flags.DEFINE_string('optimizer', 'adam', '')
+    absl.app.flags.DEFINE_string('dtype', 'float32', '')
 
     absl.app.flags.DEFINE_float('learning_rate', .001, '')
     absl.app.flags.DEFINE_float('rate_cost', 100., '')

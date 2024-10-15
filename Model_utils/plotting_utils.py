@@ -251,13 +251,14 @@ class LaminarPlot:
             self.core_mask = other_billeh_utils.isolate_core_neurons(
                 self.network, n_selected_neurons=self.core_neurons, data_dir=self.data_dir)
         else:
-            if self.area_name == 'v1':
-                self.core_neurons = 51978
-            elif self.area_name == 'lm':
-                self.core_neurons = int(51978/v1_to_lm_neurons_ratio)
+            self.core_neurons = self.n_neurons
+            # if self.area_name == 'v1':
+            #     self.core_neurons = self.n_neurons #51978
+            # elif self.area_name == 'lm':
+            #     # self.core_neurons = int(51978/v1_to_lm_neurons_ratio)
                 
-            if self.n_neurons > self.core_neurons:
-                self.n_neurons = self.core_neurons
+            # if self.n_neurons > self.core_neurons:
+            #     self.n_neurons = self.core_neurons
 
             # self.core_mask = np.full(self.n_neurons, True)
             self.core_mask = other_billeh_utils.isolate_core_neurons(

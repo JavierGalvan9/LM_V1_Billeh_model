@@ -35,7 +35,10 @@ def printgpu(gpu_id=0):
         used, free, total = [float(x)/1024 for x in result.stdout.strip().split(',')]
         print(f"    Total GPU Memory Usage: Used: {used:.2f} GiB, Free: {free:.2f} GiB, Total: {total:.2f} GiB")
 
+<<<<<<< HEAD
         return current, peak
+=======
+>>>>>>> c8bcddf (Corrections to mixed_precision + loss scaling + other corrections/improvements)
 
 def compose_str(metrics_values):
         _acc, _loss, _rate, _rate_loss, _voltage_loss, _regularizer_loss, _osi_dsi_loss, _sync_loss = metrics_values
@@ -875,6 +878,17 @@ class Callbacks:
         tf.print(f'Epoch {self.epoch:2d}/{self.total_epochs} @ {date_str}')
 
     def on_epoch_end(self, x, v1_spikes, lm_spikes, y, metric_values, bkg_noise=None, verbose=True, x_spont=None, v1_spikes_spont=None, lm_spikes_spont=None):
+        
+        if v1_spikes.dtype == tf.float16:
+            v1_spikes = v1_spikes.numpy().astype(np.float32)
+            lm_spikes = lm_spikes.numpy().astype(np.float32)
+            x = x.numpy().astype(np.float32)
+            y = y.numpy().astype(np.float32)
+            if x_spont is not None:
+                x_spont = x_spont.numpy().astype(np.float32)
+                v1_spikes_spont = v1_spikes_spont.numpy().astype(np.float32)
+                lm_spikes_spont = lm_spikes_spont.numpy().astype(np.float32)
+        
         self.step = 0
         if self.initial_metric_values is None:
             self.initial_metric_values = metric_values
@@ -968,6 +982,7 @@ class Callbacks:
             print_str = f'  Step {self.step:2d}/{self.flags.steps_per_epoch} - Angle: {y[0][0]:.2f}\n'
             print_str += '    ' + compose_str(train_values)
             print(print_str)
+            tf.print(print_str)
             print(f'    Step running time: {time() - self.step_init_time:.2f}s')
             for gpu_id in range(len(self.strategy.extended.worker_devices)):
                 printgpu(gpu_id=gpu_id)
@@ -1006,9 +1021,12 @@ class Callbacks:
         plt.close()
     
     def plot_raster(self, x, v1_spikes, lm_spikes, y):
+<<<<<<< HEAD
         x = x.numpy()
         v1_spikes = v1_spikes.numpy()
         lm_spikes = lm_spikes.numpy()
+=======
+>>>>>>> c8bcddf (Corrections to mixed_precision + loss scaling + other corrections/improvements)
         seq_len = v1_spikes.shape[1]
 
         images_dir = os.path.join(self.logdir, 'Raster_plots')
@@ -1028,9 +1046,15 @@ class Callbacks:
 
     def composed_raster(self, x, v1_spikes, lm_spikes, x_spont, v1_spikes_spont, lm_spikes_spont, y, plot_core_only=True):
         # concatenate the normal and spontaneous arrays
+<<<<<<< HEAD
         x = np.concatenate((x_spont.numpy(), x.numpy()), axis=1)
         v1_spikes = np.concatenate((v1_spikes_spont.numpy(), v1_spikes.numpy()), axis=1)
         lm_spikes = np.concatenate((lm_spikes_spont.numpy(), lm_spikes.numpy()), axis=1)
+=======
+        x = np.concatenate((x_spont, x), axis=1)
+        v1_spikes = np.concatenate((v1_spikes_spont, v1_spikes), axis=1)
+        lm_spikes = np.concatenate((lm_spikes_spont, lm_spikes), axis=1)
+>>>>>>> c8bcddf (Corrections to mixed_precision + loss scaling + other corrections/improvements)
         seq_len = v1_spikes.shape[1]
 
         images_dir = os.path.join(self.logdir, 'Raster_plots')
@@ -1053,7 +1077,7 @@ class Callbacks:
         graph(x, v1_spikes, lm_spikes)
 
     def plot_bkg_noise(self, x, bin_width_ms=10):
-        x = x.numpy()[0, :, :]
+        x = x[0, :, :]
         x_mean = np.mean(x, axis=1)
         
         # Calculate number of bins
@@ -1073,8 +1097,8 @@ class Callbacks:
         plt.close()
 
     def plot_lgn_activity(self, x, x_spont):
-        x = x.numpy()[0, :, :]
-        x_spont = x_spont.numpy()[0, :, :]
+        x = x[0, :, :]
+        x_spont = x_spont[0, :, :]
         x = np.concatenate((x_spont, x), axis=0)
         x_mean = np.mean(x, axis=1)
         plt.figure(figsize=(10, 5))
@@ -1206,11 +1230,11 @@ class Callbacks:
     def plot_synchronization_evolution(self, v1_spikes, lm_spikes, v1_spikes_spont=None, lm_spikes_spont=None, pairwise_correlation=False):
         # join the spikes in each area
         if v1_spikes_spont is not None:
-            v1_spikes = np.concatenate((v1_spikes_spont.numpy(), v1_spikes.numpy()), axis=1)
-            lm_spikes = np.concatenate((lm_spikes_spont.numpy(), lm_spikes.numpy()), axis=1)
+            v1_spikes = np.concatenate((v1_spikes_spont, v1_spikes), axis=1)
+            lm_spikes = np.concatenate((lm_spikes_spont, lm_spikes), axis=1)
         else:
-            v1_spikes = v1_spikes.numpy()
-            lm_spikes = lm_spikes.numpy()
+            v1_spikes = v1_spikes
+            lm_spikes = lm_spikes
 
         if pairwise_correlation:
             v1_sync = self.compute_mean_pairwise_correlation(v1_spikes, area='v1')
@@ -1243,8 +1267,13 @@ class Callbacks:
 
     def plot_populations_activity(self, v1_spikes, lm_spikes, v1_spikes_spont, lm_spikes_spont):
         # join the spikes in each area
+<<<<<<< HEAD
         v1_spikes = np.concatenate((v1_spikes_spont.numpy(), v1_spikes.numpy()), axis=1)
         lm_spikes = np.concatenate((lm_spikes_spont.numpy(), lm_spikes.numpy()), axis=1)
+=======
+        v1_spikes = np.concatenate((v1_spikes_spont, v1_spikes), axis=1)
+        lm_spikes = np.concatenate((lm_spikes_spont, lm_spikes), axis=1)
+>>>>>>> c8bcddf (Corrections to mixed_precision + loss scaling + other corrections/improvements)
         seq_len = v1_spikes.shape[1]
         # # save the spikes in a pickle file 
         # with open(f'v1_lm_spikes.pkl', 'wb') as f:
@@ -1262,7 +1291,7 @@ class Callbacks:
             Population_activity(z[area_id], area=area, plot_core_only=True, bin_size=10)
 
     def bkg_correlation_analysis(self, v1_spikes, lm_spikes, bkg_noise):
-        z = v1_spikes.numpy()
+        z = v1_spikes
         z = np.mean(z[0,:,:], axis=1)
         noise = self.noise_psc(bkg_noise)
         noise = np.mean(noise, axis=1)
@@ -1389,10 +1418,15 @@ class Callbacks:
         return noise_current
 
     def plot_mean_firing_rate_boxplot(self, v1_spikes, lm_spikes, y):
+<<<<<<< HEAD
         v1_spikes = v1_spikes.numpy()
         lm_spikes = lm_spikes.numpy()
         seq_len = v1_spikes.shape[1]
         DG_angles = y.numpy()
+=======
+        seq_len = v1_spikes.shape[1]
+        DG_angles = y
+>>>>>>> c8bcddf (Corrections to mixed_precision + loss scaling + other corrections/improvements)
         boxplots_dir = os.path.join(self.logdir, f'Boxplots/{self.neuropixels_feature}')
         os.makedirs(boxplots_dir, exist_ok=True)
         fig, axs = plt.subplots(2, 1, figsize=(12, 14))
@@ -1433,10 +1467,15 @@ class Callbacks:
     #     plt.close()
 
     def plot_spontaneous_boxplot(self, v1_spikes, lm_spikes, y):
+<<<<<<< HEAD
         v1_spikes = v1_spikes.numpy()
         lm_spikes = lm_spikes.numpy()
         seq_len = v1_spikes.shape[1]
         DG_angles = y.numpy()
+=======
+        seq_len = v1_spikes.shape[1]
+        DG_angles = y
+>>>>>>> c8bcddf (Corrections to mixed_precision + loss scaling + other corrections/improvements)
         boxplots_dir = os.path.join(self.logdir, f'Boxplots/Spontaneous')
         os.makedirs(boxplots_dir, exist_ok=True)
         fig, axs = plt.subplots(2, 1, figsize=(12, 14))
@@ -1452,10 +1491,14 @@ class Callbacks:
         plt.close()
 
     def plot_tuning_analysis(self, v1_spikes, lm_spikes, y, directory=''):
+<<<<<<< HEAD
         v1_spikes = v1_spikes.numpy()
         lm_spikes = lm_spikes.numpy()
         seq_len = v1_spikes.shape[1]
         y = y.numpy()
+=======
+        seq_len = v1_spikes.shape[1]
+>>>>>>> c8bcddf (Corrections to mixed_precision + loss scaling + other corrections/improvements)
         os.makedirs(directory, exist_ok=True)
         fig, axs = plt.subplots(2, 1, figsize=(12, 14))
         for axis_id, spikes, area in zip([0, 1], [v1_spikes, lm_spikes], ['v1', 'lm']):
@@ -1474,8 +1517,6 @@ class Callbacks:
         # plt.close()
 
     def power_spectrum(self, v1_spikes, lm_spikes, v1_spikes_spont=None, lm_spikes_spont=None, fs=1000, directory=''):
-        v1_spikes = v1_spikes.numpy() # (1, 500, 100000)
-        lm_spikes = lm_spikes.numpy()
         # Sum the spikes over the batch size and all neurons to get a single spiking activity signal for each area
         combined_spiking_activity_v1 = v1_spikes.mean(axis=(0, 2))
         combined_spiking_activity_lm = lm_spikes.mean(axis=(0, 2))
@@ -1501,8 +1542,6 @@ class Callbacks:
         sns.lineplot(x=f_lm, y=power_spectrum_lm, label='LM', color='orange')
 
         if v1_spikes_spont is not None:
-            v1_spikes_spont = v1_spikes_spont.numpy()
-            lm_spikes_spont = lm_spikes_spont.numpy()
             combined_spiking_activity_v1_spont = v1_spikes_spont.mean(axis=(0, 2))
             combined_spiking_activity_lm_spont = lm_spikes_spont.mean(axis=(0, 2))
             v1_signal_spont = exponential_decay_filter(combined_spiking_activity_v1_spont)

@@ -91,7 +91,19 @@ def main(_):
         else:
             mixed_precision.set_global_policy('mixed_float16')
         dtype = tf.float16
+<<<<<<< HEAD
         print('Mixed precision enabled!')
+=======
+        print('Mixed precision (float16) enabled!')
+    elif flags.bfloat16:
+        if version.parse(tf.__version__) < version.parse("2.4.0"):
+            policy = mixed_precision.Policy("mixed_bfloat16")
+            mixed_precision.set_policy(policy)
+        else:
+            mixed_precision.set_global_policy('mixed_bfloat16')
+        dtype = tf.bfloat16
+        print('Mixed precision (bfloat16) enabled!')
+>>>>>>> c8bcddf (Corrections to mixed_precision + loss scaling + other corrections/improvements)
     else:
         dtype = tf.float32
 
@@ -410,6 +422,7 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_string('interarea_weight_distribution', 'billeh_weights', '')
     absl.app.flags.DEFINE_string('delays', '100,0', '')
     absl.app.flags.DEFINE_string('optimizer', 'adam', '')
+    absl.app.flags.DEFINE_string('dtype', 'float32', '')
 
     absl.app.flags.DEFINE_float('learning_rate', .001, '')
     absl.app.flags.DEFINE_float('rate_cost', 100., '')

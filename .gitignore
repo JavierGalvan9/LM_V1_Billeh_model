@@ -73,6 +73,7 @@ Time_to_first_spike_0824/tfs_data
 Time_to_first_spike_0824/Raster_plots
 Time_to_first_spike_0824/Data
 Time_to_first_spike_0924/Data
+<<<<<<< HEAD
 Time_to_first_spike_0924/tfs_data
 
 receptive_field_0924/Data_connected
@@ -108,3 +109,9 @@ Time_to_first_spike_0924/spiking_rates_stim_types_v1_black.pkl
 Time_to_first_spike_0924/spiking_rates_stim_types_v1_dis_black.pkl
 Time_to_first_spike_0924/spiking_rates_stim_types_v1_dis.pkl
 Time_to_first_spike_0924/spiking_rates_stim_types_v1.pkl
+=======
+
+receptive_field_0924/Data_connected
+receptive_field_0924/Data_disconnected
+
+>>>>>>> c8bcddf (Corrections to mixed_precision + loss scaling + other corrections/improvements)
