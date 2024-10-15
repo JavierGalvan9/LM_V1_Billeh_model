@@ -94,6 +94,15 @@ def main(_):
         else:
             mixed_precision.set_global_policy('mixed_float16')
         dtype = tf.float16
+        print('Mixed precision (float16) enabled!')
+    elif flags.dtype=='bfloat16':
+        if version.parse(tf.__version__) < version.parse("2.4.0"):
+            policy = mixed_precision.Policy("mixed_bfloat16")
+            mixed_precision.set_policy(policy)
+        else:
+            mixed_precision.set_global_policy('mixed_bfloat16')
+        dtype = tf.bfloat16
+        print('Mixed precision (bfloat16) enabled!')
     else:
         dtype = tf.float32
 
@@ -182,8 +191,6 @@ def main(_):
             print(f"Invalid optimizer: {flags.optimizer}")
             raise ValueError
         
-        optimizer.build(model.trainable_variables)
-
         # Restore model and optimizer from a checkpoint if it exists
         if flags.ckpt_dir != '' and os.path.exists(os.path.join(flags.ckpt_dir, "OSI_DSI_checkpoints")):
             checkpoint_directory = tf.train.latest_checkpoint(os.path.join(flags.ckpt_dir, "OSI_DSI_checkpoints"))
@@ -289,12 +296,12 @@ def main(_):
         # v1_sync_regularizer = losses.SynchronizationLoss(sync_cost=flags.sync_cost, target_sync=0., area='v1', core_mask=v1_core_mask, pre_delay=delays[0], post_delay=delays[1], dtype=dtype)
         # lm_sync_regularizer = losses.SynchronizationLoss(sync_cost=flags.sync_cost, target_sync=0., area='lm', core_mask=lm_core_mask, pre_delay=delays[0], post_delay=delays[1], dtype=dtype)
         # model.add_loss(lambda: v1_sync_regularizer(rsnn_layer.output[0][0]) + lm_sync_regularizer(rsnn_layer.output[0][2]))
-        v1_evoked_sync_loss = losses.SynchronizationLoss(networks['v1'], sync_cost=flags.sync_cost, area='v1', core_mask=v1_core_mask, t_start=0.2, t_end=0.5, n_samples=500, dtype=dtype, session='evoked', data_dir='Synchronization_data')
-        lm_evoked_sync_loss = losses.SynchronizationLoss(networks['lm'], sync_cost=flags.sync_cost, area='lm', core_mask=lm_core_mask, t_start=0.2, t_end=0.5, n_samples=500, dtype=dtype, session='evoked', data_dir='Synchronization_data')
+        v1_evoked_sync_loss = losses.SynchronizationLoss(networks['v1'], sync_cost=flags.sync_cost, area='v1', core_mask=v1_core_mask, t_start=0.2, t_end=flags.seq_len/1000, n_samples=500, dtype=tf.float32, session='evoked', data_dir='Synchronization_data')
+        lm_evoked_sync_loss = losses.SynchronizationLoss(networks['lm'], sync_cost=flags.sync_cost, area='lm', core_mask=lm_core_mask, t_start=0.2, t_end=flags.seq_len/1000, n_samples=500, dtype=tf.float32, session='evoked', data_dir='Synchronization_data')
         model.add_loss(lambda: v1_evoked_sync_loss(rsnn_layer.output[0][0]) + lm_evoked_sync_loss(rsnn_layer.output[0][2]))
 
-        v1_spont_sync_loss = losses.SynchronizationLoss(networks['v1'], sync_cost=flags.sync_cost, area='v1', core_mask=v1_core_mask, t_start=0.2, t_end=0.5, n_samples=500, dtype=dtype, session='spont', data_dir='Synchronization_data')
-        lm_spont_sync_loss = losses.SynchronizationLoss(networks['lm'], sync_cost=flags.sync_cost, area='lm', core_mask=lm_core_mask, t_start=0.2, t_end=0.5, n_samples=500, dtype=dtype, session='spont', data_dir='Synchronization_data')
+        v1_spont_sync_loss = losses.SynchronizationLoss(networks['v1'], sync_cost=flags.sync_cost, area='v1', core_mask=v1_core_mask, t_start=0.2, t_end=flags.seq_len/1000, n_samples=500, dtype=tf.float32, session='spont', data_dir='Synchronization_data')
+        lm_spont_sync_loss = losses.SynchronizationLoss(networks['lm'], sync_cost=flags.sync_cost, area='lm', core_mask=lm_core_mask, t_start=0.2, t_end=flags.seq_len/1000, n_samples=500, dtype=tf.float32, session='spont', data_dir='Synchronization_data')
         model.add_loss(lambda: v1_spont_sync_loss(rsnn_layer.output[0][0]) + lm_spont_sync_loss(rsnn_layer.output[0][2]))
 
         # Create an ExponentialMovingAverage object
@@ -308,8 +315,8 @@ def main(_):
                 lm_ema = tf.Variable(data_loaded['lm_ema'], trainable=False, name='LM_EMA')
         else:
             # 3 Hz is near the average FR of cortex
-            v1_ema = tf.Variable(tf.constant(0.003, shape=(v1_neurons,)), trainable=False, name='V1_EMA')
-            lm_ema = tf.Variable(tf.constant(0.003, shape=(lm_neurons,)), trainable=False, name='LM_EMA')
+            v1_ema = tf.Variable(tf.constant(0.003, shape=(v1_neurons,), dtype=tf.float32), trainable=False, name='V1_EMA')
+            lm_ema = tf.Variable(tf.constant(0.003, shape=(lm_neurons,), dtype=tf.float32), trainable=False, name='LM_EMA')
 
         # if training for spontaneous firing rates set the osi loss to 0
         if flags.spontaneous_training:

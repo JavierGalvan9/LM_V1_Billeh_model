@@ -91,9 +91,6 @@ def main(_):
         else:
             mixed_precision.set_global_policy('mixed_float16')
         dtype = tf.float16
-<<<<<<< HEAD
-        print('Mixed precision enabled!')
-=======
         print('Mixed precision (float16) enabled!')
     elif flags.bfloat16:
         if version.parse(tf.__version__) < version.parse("2.4.0"):
@@ -103,7 +100,6 @@ def main(_):
             mixed_precision.set_global_policy('mixed_bfloat16')
         dtype = tf.bfloat16
         print('Mixed precision (bfloat16) enabled!')
->>>>>>> c8bcddf (Corrections to mixed_precision + loss scaling + other corrections/improvements)
     else:
         dtype = tf.float32
 

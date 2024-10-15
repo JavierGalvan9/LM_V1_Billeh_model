@@ -437,11 +437,7 @@ class LGN(object):
             # actual_spatial_range = loaded['actual_spatial_range']
             
         # Preprocess data outside the loop if they don't change
-<<<<<<< HEAD
-        if n_input is None:
-=======
         if n_input is None or len(x) == 17400:
->>>>>>> c8bcddf (Corrections to mixed_precision + loss scaling + other corrections/improvements)
             self.x = tf.constant(x, dtype=dtype)
             self.y = tf.constant(y, dtype=dtype)
             self.non_dominant_x = tf.constant(non_dominant_x, dtype=dtype)
@@ -454,11 +450,7 @@ class LGN(object):
             self.dom_temporal_kernels = tf.constant(dom_temporal_kernels, dtype=dtype)
             self.non_dom_temporal_kernels = tf.constant(non_dom_temporal_kernels, dtype=dtype)
             # self.gaussian_filters = gaussian_filters
-<<<<<<< HEAD
-            self.gaussian_filters = [tf.constant(gf, dtype=dtype) for gf in self.gaussian_filters]
-=======
             self.gaussian_filters = [tf.cast(gf, dtype=dtype) for gf in gaussian_filters]
->>>>>>> c8bcddf (Corrections to mixed_precision + loss scaling + other corrections/improvements)
             self.spatial_range_indices = spatial_range_indices
             self.sorted_neuron_ids_indices = sorted_neuron_ids_indices
             # self.actual_spatial_range = actual_spatial_range

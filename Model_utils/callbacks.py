@@ -35,10 +35,6 @@ def printgpu(gpu_id=0):
         used, free, total = [float(x)/1024 for x in result.stdout.strip().split(',')]
         print(f"    Total GPU Memory Usage: Used: {used:.2f} GiB, Free: {free:.2f} GiB, Total: {total:.2f} GiB")
 
-<<<<<<< HEAD
-        return current, peak
-=======
->>>>>>> c8bcddf (Corrections to mixed_precision + loss scaling + other corrections/improvements)
 
 def compose_str(metrics_values):
         _acc, _loss, _rate, _rate_loss, _voltage_loss, _regularizer_loss, _osi_dsi_loss, _sync_loss = metrics_values
@@ -1021,12 +1017,6 @@ class Callbacks:
         plt.close()
     
     def plot_raster(self, x, v1_spikes, lm_spikes, y):
-<<<<<<< HEAD
-        x = x.numpy()
-        v1_spikes = v1_spikes.numpy()
-        lm_spikes = lm_spikes.numpy()
-=======
->>>>>>> c8bcddf (Corrections to mixed_precision + loss scaling + other corrections/improvements)
         seq_len = v1_spikes.shape[1]
 
         images_dir = os.path.join(self.logdir, 'Raster_plots')
@@ -1046,15 +1036,9 @@ class Callbacks:
 
     def composed_raster(self, x, v1_spikes, lm_spikes, x_spont, v1_spikes_spont, lm_spikes_spont, y, plot_core_only=True):
         # concatenate the normal and spontaneous arrays
-<<<<<<< HEAD
-        x = np.concatenate((x_spont.numpy(), x.numpy()), axis=1)
-        v1_spikes = np.concatenate((v1_spikes_spont.numpy(), v1_spikes.numpy()), axis=1)
-        lm_spikes = np.concatenate((lm_spikes_spont.numpy(), lm_spikes.numpy()), axis=1)
-=======
         x = np.concatenate((x_spont, x), axis=1)
         v1_spikes = np.concatenate((v1_spikes_spont, v1_spikes), axis=1)
         lm_spikes = np.concatenate((lm_spikes_spont, lm_spikes), axis=1)
->>>>>>> c8bcddf (Corrections to mixed_precision + loss scaling + other corrections/improvements)
         seq_len = v1_spikes.shape[1]
 
         images_dir = os.path.join(self.logdir, 'Raster_plots')
@@ -1267,13 +1251,8 @@ class Callbacks:
 
     def plot_populations_activity(self, v1_spikes, lm_spikes, v1_spikes_spont, lm_spikes_spont):
         # join the spikes in each area
-<<<<<<< HEAD
-        v1_spikes = np.concatenate((v1_spikes_spont.numpy(), v1_spikes.numpy()), axis=1)
-        lm_spikes = np.concatenate((lm_spikes_spont.numpy(), lm_spikes.numpy()), axis=1)
-=======
         v1_spikes = np.concatenate((v1_spikes_spont, v1_spikes), axis=1)
         lm_spikes = np.concatenate((lm_spikes_spont, lm_spikes), axis=1)
->>>>>>> c8bcddf (Corrections to mixed_precision + loss scaling + other corrections/improvements)
         seq_len = v1_spikes.shape[1]
         # # save the spikes in a pickle file 
         # with open(f'v1_lm_spikes.pkl', 'wb') as f:
@@ -1418,15 +1397,8 @@ class Callbacks:
         return noise_current
 
     def plot_mean_firing_rate_boxplot(self, v1_spikes, lm_spikes, y):
-<<<<<<< HEAD
-        v1_spikes = v1_spikes.numpy()
-        lm_spikes = lm_spikes.numpy()
-        seq_len = v1_spikes.shape[1]
-        DG_angles = y.numpy()
-=======
         seq_len = v1_spikes.shape[1]
         DG_angles = y
->>>>>>> c8bcddf (Corrections to mixed_precision + loss scaling + other corrections/improvements)
         boxplots_dir = os.path.join(self.logdir, f'Boxplots/{self.neuropixels_feature}')
         os.makedirs(boxplots_dir, exist_ok=True)
         fig, axs = plt.subplots(2, 1, figsize=(12, 14))
@@ -1467,15 +1439,8 @@ class Callbacks:
     #     plt.close()
 
     def plot_spontaneous_boxplot(self, v1_spikes, lm_spikes, y):
-<<<<<<< HEAD
-        v1_spikes = v1_spikes.numpy()
-        lm_spikes = lm_spikes.numpy()
-        seq_len = v1_spikes.shape[1]
-        DG_angles = y.numpy()
-=======
         seq_len = v1_spikes.shape[1]
         DG_angles = y
->>>>>>> c8bcddf (Corrections to mixed_precision + loss scaling + other corrections/improvements)
         boxplots_dir = os.path.join(self.logdir, f'Boxplots/Spontaneous')
         os.makedirs(boxplots_dir, exist_ok=True)
         fig, axs = plt.subplots(2, 1, figsize=(12, 14))
@@ -1491,14 +1456,7 @@ class Callbacks:
         plt.close()
 
     def plot_tuning_analysis(self, v1_spikes, lm_spikes, y, directory=''):
-<<<<<<< HEAD
-        v1_spikes = v1_spikes.numpy()
-        lm_spikes = lm_spikes.numpy()
         seq_len = v1_spikes.shape[1]
-        y = y.numpy()
-=======
-        seq_len = v1_spikes.shape[1]
->>>>>>> c8bcddf (Corrections to mixed_precision + loss scaling + other corrections/improvements)
         os.makedirs(directory, exist_ok=True)
         fig, axs = plt.subplots(2, 1, figsize=(12, 14))
         for axis_id, spikes, area in zip([0, 1], [v1_spikes, lm_spikes], ['v1', 'lm']):

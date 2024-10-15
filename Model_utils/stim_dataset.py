@@ -52,11 +52,7 @@ def make_drifting_grating_stimulus(row_size=120, col_size=240, moving_flag=True,
     data = contrast * tf.sin(2 * pi * (cpd * xy + temporal_f * tt) + phase_rad)
 
     if moving_flag: # decide whether the gratings drift or they are static 
-<<<<<<< HEAD
-        return tf.cast(data, dtype) 
-=======
         return data
->>>>>>> c8bcddf (Corrections to mixed_precision + loss scaling + other corrections/improvements)
     else:
         return tf.tile(data[0][tf.newaxis, ...], (image_duration, 1, 1))
 
@@ -91,11 +87,7 @@ def generate_drifting_grating_tuning(orientation=None, temporal_f=2, cpd=0.04, c
                 if regular:
                     theta = (theta + 45) % 360
                 else:
-<<<<<<< HEAD
-                    theta = np.random.uniform(0, 360)
-=======
                     theta = tf.random.uniform(shape=(1,), minval=0, maxval=360, dtype=dtype)
->>>>>>> c8bcddf (Corrections to mixed_precision + loss scaling + other corrections/improvements)
             else:
                 theta = orientation
 
@@ -111,11 +103,7 @@ def generate_drifting_grating_tuning(orientation=None, temporal_f=2, cpd=0.04, c
             # Generate a random phase
             phase = tf.random.uniform(shape=(1,), minval=0, maxval=360, dtype=dtype)
             # phase = np.random.uniform(0, 360)
-<<<<<<< HEAD
-            mov_theta = tf.constant(mov_theta, dtype=dtype)
-=======
             # mov_theta = tf.constant(mov_theta, dtype=dtype)
->>>>>>> c8bcddf (Corrections to mixed_precision + loss scaling + other corrections/improvements)
 
             movie = make_drifting_grating_stimulus(moving_flag=True, image_duration=duration, cpd=cpd, temporal_f=temporal_f, theta=mov_theta, 
                                                    phase=phase, contrast=contrast, dtype=dtype)

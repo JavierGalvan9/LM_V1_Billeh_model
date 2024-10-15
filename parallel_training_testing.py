@@ -144,11 +144,7 @@ def main():
     # Define the job submission commands for the training and evaluation scripts
     # training_commands = ["run", "-g", "1", "-m", "24", "-t", "1:15"]
     # evaluation_commands = ["run", "-g", "1", "-m", "65", "-t", "0:45"]
-<<<<<<< HEAD
-    training_commands = ["run", "-g", "1", "-G", "L40S", "-m", "48", "-t", "5:00"] # L40S choose the particular gpu model for training with 48 GB of memory
-=======
     training_commands = ["run", "-g", "1", "-G", "rtx3090", "-m", "48", "-t", "5:00"] # L40S choose the particular gpu model for training with 48 GB of memory
->>>>>>> c8bcddf (Corrections to mixed_precision + loss scaling + other corrections/improvements)
     evaluation_commands = ["run", "-g", "1", "-m", "80", "-t", "2:30"]
 
     # Define the training and evaluation script calls
@@ -211,11 +207,7 @@ def main():
             # new_training_script = training_script + f"--train_noise --train_recurrent_v1 --train_recurrent_lm --train_interarea_v1_lm --seed {flags.seed + i} --ckpt_dir {logdir} --run_session {i}"
             # new_training_script = training_script + f"--delays '0,0' --seq_len 500 --seed {flags.seed + i} --ckpt_dir {logdir} --run_session {i}"
             # new_first_training_script = first_training_script + f"--seed {flags.seed + i} --ckpt_dir {logdir} --run_session {i}"
-<<<<<<< HEAD
-            new_first_training_script = training_script + f"--seed {flags.seed + i} --ckpt_dir {logdir} --run_session {i}"
-=======
             new_first_training_script = training_script + f"--dtype 'float32' --seed {flags.seed + i} --ckpt_dir {logdir} --run_session {i}"
->>>>>>> c8bcddf (Corrections to mixed_precision + loss scaling + other corrections/improvements)
             new_training_command = new_training_command + [new_first_training_script]
             job_id = submit_job(new_training_command)
         job_ids.append(job_id)
