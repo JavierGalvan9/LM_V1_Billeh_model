@@ -21,6 +21,7 @@ from Model_utils import load_sparse, models, stim_dataset, toolkit
 from Model_utils.callbacks import OsiDsiCallbacks, printgpu
 from time import time
 import ctypes.util
+import random
 
 
 print("--- CUDA version: ", tf.sysconfig.get_build_info()["cuda_version"])
@@ -50,6 +51,7 @@ def main(_):
     # Set the seeds for reproducibility
     np.random.seed(flags.seed)
     tf.random.set_seed(flags.seed)
+    random.seed(flags.seed)
 
     # Select the connectivity rules in the network
     if flags.realistic_neurons_ratio:
@@ -84,7 +86,7 @@ def main(_):
         current_epoch = (flags.run_session + 1) * flags.n_epochs
         
     # Can be used to try half precision training
-    if flags.float16:
+    if flags.dtype=='float16':
         if version.parse(tf.__version__) < version.parse("2.4.0"):
             policy = mixed_precision.Policy("mixed_float16")
             mixed_precision.set_policy(policy)
@@ -92,7 +94,7 @@ def main(_):
             mixed_precision.set_global_policy('mixed_float16')
         dtype = tf.float16
         print('Mixed precision (float16) enabled!')
-    elif flags.bfloat16:
+    elif flags.dtype=='bfloat16':
         if version.parse(tf.__version__) < version.parse("2.4.0"):
             policy = mixed_precision.Policy("mixed_bfloat16")
             mixed_precision.set_policy(policy)
@@ -344,7 +346,7 @@ def main(_):
             else:
                 raise ValueError(f"Invalid reset_type: {reset_type}")
 
-        @tf.function
+        # @tf.function
         def distributed_reset_state(reset_type, gray_state=None):
             if reset_type == 'gray':
                 strategy.run(reset_state, args=(reset_type, gray_state))
@@ -460,7 +462,7 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_integer('neurons_per_output', 16, '')
     absl.app.flags.DEFINE_integer('n_trials_per_angle', 10, '')
 
-    absl.app.flags.DEFINE_boolean('float16', False, '')
+    # absl.app.flags.DEFINE_boolean('float16', False, '')
     absl.app.flags.DEFINE_boolean('caching', True, '')
     absl.app.flags.DEFINE_boolean('core_only', False, '')
     absl.app.flags.DEFINE_boolean('core_loss', False, '')

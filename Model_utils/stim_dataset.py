@@ -116,7 +116,8 @@ def generate_drifting_grating_tuning(orientation=None, temporal_f=2, cpd=0.04, c
             # process temporal filters and get firing rates
             firing_rates = lgn.firing_rates_from_spatial(*spatial)
             if return_firing_rates:
-                yield tf.constant(firing_rates, dtype=dtype, shape=(seq_len, n_input))
+                # yield tf.constant(firing_rates, dtype=dtype, shape=(seq_len, n_input))
+                yield firing_rates
 
             else:
                 del spatial
@@ -131,7 +132,7 @@ def generate_drifting_grating_tuning(orientation=None, temporal_f=2, cpd=0.04, c
                     _z = tf.random.uniform(tf.shape(_p), dtype=dtype) < _p
                 del _p
 
-                yield _z, tf.constant(theta, dtype=dtype, shape=(1,)), tf.constant(contrast, dtype=dtype, shape=(1,)), tf.constant(duration, dtype=dtype, shape=(1,))
+                yield _z, theta, tf.constant(contrast, dtype=dtype, shape=(1,)), tf.constant(duration, dtype=dtype, shape=(1,))
                 # yield _z, np.array([theta], dtype=np.float32)
 
     if return_firing_rates:

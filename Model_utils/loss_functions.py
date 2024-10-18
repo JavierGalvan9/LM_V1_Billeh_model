@@ -783,7 +783,6 @@ class OrientationSelectivityLoss:
             
         # sum spikes in _z, and multiply with delta_angle.
         rates = tf.reduce_mean(spikes, axis=[0, 1])
-
         if self._core_mask is not None:
             rates = tf.boolean_mask(rates, self._core_mask, axis=0)
 
@@ -822,3 +821,5 @@ class OrientationSelectivityLoss:
             return self.crowd_spikes_loss(spikes, angle)
         elif self._method == "neuropixels_fr":
             return self.neuropixels_fr_loss(spikes, angle)
+
+            

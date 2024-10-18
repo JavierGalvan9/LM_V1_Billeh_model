@@ -15,7 +15,6 @@ def pseudo_derivative(v_scaled, dampening_factor):
 # def slayer_pseudo(v_scaled, sigma, amplitude):
 #     return tf.math.exp(-sigma * tf.abs(v_scaled)) * amplitude
 
-
 @tf.custom_gradient
 def spike_gauss(v_scaled, sigma, amplitude):
     z_ = tf.greater(v_scaled, 0.)
@@ -180,7 +179,7 @@ def make_pre_ind_table(indices, n_source_neurons=197613):
     n_syn = pre_inds.shape[0]
     # Since pre_inds may not be sorted, we sort them along with synapse_indices
     sorted_pre_inds, sorted_synapse_indices = tf.math.top_k(-pre_inds, k=n_syn)
-    sorted_pre_inds = -sorted_pre_inds  # Undo the negation to get the sorted pre_inds
+    sorted_pre_inds = tf.cast(-sorted_pre_inds, dtype=tf.int32)  # Undo the negation to get the sorted pre_inds
     # Count occurrences (out-degrees) for each presynaptic neuron using bincount
     counts = tf.math.bincount(sorted_pre_inds, minlength=n_source_neurons)
     # Create row_splits that covers all presynaptic neurons (0 to n_source_neurons)
@@ -471,8 +470,8 @@ class BillehColumn(tf.keras.layers.Layer):
         pseudo_gauss=False, 
         spike_gradient=False,
         train_recurrent=True, 
-        train_input=True, 
-        train_noise=False,
+        train_input=False, 
+        train_noise=True,
         train_interarea=True, 
         hard_reset=False, 
         connected_areas=True,
@@ -604,7 +603,7 @@ class BillehColumn(tf.keras.layers.Layer):
 
         # Define the Tensorflow variables
         self.recurrent_indices = tf.Variable(indices, dtype=tf.int64, trainable=False)
-        self.pre_ind_table = make_pre_ind_table(indices, n_source_neurons=dense_shape[1])
+        self.pre_ind_table = make_pre_ind_table(indices, n_source_neurons=self.recurrent_dense_shape[1])
 
         # Set the sign of the connections (exc or inh)
         recurrent_weight_positive = tf.Variable(
@@ -916,7 +915,7 @@ class BillehColumn(tf.keras.layers.Layer):
         v_sc = (new_v - self.v_th) / self.normalizer
         if self._pseudo_gauss:
             if self.compute_dtype == tf.bfloat16:
-                new_z = spike_gauss_b16(v_sc, self._dampening_factor)
+                new_z = spike_gauss_b16(v_sc, self._gauss_std, self._dampening_factor)
             elif self.compute_dtype == tf.float16:
                 new_z = spike_gauss_16(v_sc, self._gauss_std, self._dampening_factor)
             else:

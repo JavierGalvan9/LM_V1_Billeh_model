@@ -26,6 +26,8 @@ from time import time
 import ctypes.util
 import random
 
+import logging
+tf.get_logger().setLevel(logging.INFO)
 
 print("--- CUDA version: ", tf.sysconfig.get_build_info()["cuda_version"])
 print("--- CUDNN version: ", tf.sysconfig.get_build_info()["cudnn_version"])
@@ -184,7 +186,6 @@ def main(_):
         # optimizer = tf.keras.optimizers.Adam(flags.learning_rate, epsilon=1e-11, clipnorm=0.001)  
         if flags.optimizer == 'adam':
             optimizer = tf.keras.optimizers.Adam(flags.learning_rate, epsilon=1e-11)  
-            
         elif flags.optimizer == 'sgd':
             optimizer = tf.keras.optimizers.SGD(flags.learning_rate, momentum=0.0, nesterov=False)
         else:
@@ -243,7 +244,6 @@ def main(_):
 
         model_variables_dict['Best'] =  {var.name: var.numpy().astype(np.float16) for var in model.trainable_variables}
         print(f"Model variables stored in dictionary\n")
-        # print(model_variables_dict)
 
         ### BUILD THE LOSS AND REGULARIZER FUNCTIONS ###
         # Create rate and voltage regularizers
@@ -446,7 +446,7 @@ def main(_):
         _out, _p, _, _bkg_noise = extractor_model((_x, dummy_zeros, _initial_state))
         _v1_z, _v1_v, _lm_z, _lm_v = _out[0]
 
-        if flags.dtype == 'float16':
+        if flags.dtype != 'float32':
             _v1_z = tf.cast(_v1_z, tf.float32)
             _v1_v = tf.cast(_v1_v, tf.float32)
             _lm_z = tf.cast(_lm_z, tf.float32)
@@ -538,12 +538,15 @@ def main(_):
             # Scale the loss for float16         
             if flags.dtype=='float16':
                 _scaled_loss = optimizer.get_scaled_loss(_loss)
+                loss = _scaled_loss
+            else:
+                loss = _loss
+                
+        grad = tape.gradient(loss, model.trainable_variables)
 
         if flags.dtype=='float16':
-            scaled_gradients = tape.gradient(_scaled_loss, model.trainable_variables)
-            grad = optimizer.get_unscaled_gradients(scaled_gradients)
-        else:
-            grad = tape.gradient(_loss, model.trainable_variables)
+            grad = optimizer.get_unscaled_gradients(grad)
+
             
         # for g, v in zip(grad, model.trainable_variables):
         #     tf.print(f'Spontaneous {v.name}: ', 'Loss, total_gradients : ', _loss, tf.reduce_sum(tf.math.abs(g)))
@@ -609,7 +612,7 @@ def main(_):
 
         return model_spikes, [0., _loss, _rate, rate_loss, voltage_loss, regularizers_loss, osi_dsi_loss, sync_loss]
 
-    @tf.function
+    # @tf.function
     def distributed_split_train_step(x, y, weights, x_spontaneous, trim):
         _out = strategy.run(split_train_step, args=(x, y, weights, x_spontaneous, trim))
         return _out
@@ -711,34 +714,49 @@ def main(_):
     else:
         train_data_set = strategy.distribute_datasets_from_function(get_dataset_fn())   
 
-    def reset_state(reset_type='zero', new_state=None):
-        if reset_type == 'zero':
-            tf.nest.map_structure(lambda a, b: a.assign(b), state_variables, zero_state)
-        elif reset_type == 'gray':
-            # Run a gray simulation to get the model state
-            tf.nest.map_structure(lambda a, b: a.assign(b), state_variables, new_state)
-        elif reset_type == 'continue':
-            # Continue on the previous model state
-            # No action needed, as the state_variables will not be modified
-            pass
-        else:
-            raise ValueError(f"Invalid reset_type: {reset_type}")
+    # def reset_state(reset_type='zero', new_state=None):
+    #     if reset_type == 'zero':
+    #         tf.nest.map_structure(lambda a, b: a.assign(b), state_variables, zero_state)
+    #     elif reset_type == 'gray':
+    #         # Run a gray simulation to get the model state
+    #         tf.nest.map_structure(lambda a, b: a.assign(b), state_variables, new_state)
+    #     elif reset_type == 'continue':
+    #         # Continue on the previous model state
+    #         # No action needed, as the state_variables will not be modified
+    #         pass
+    #     else:
+    #         raise ValueError(f"Invalid reset_type: {reset_type}")
 
     # @tf.function
-    def distributed_reset_state(reset_type, gray_state=None):
-        if reset_type == 'gray':
-            if gray_state is None:
-                # Generate LGN spikes
-                x = generate_spontaneous_spikes(spontaneous_prob)
-                tf.nest.map_structure(lambda a, b: a.assign(b), state_variables, zero_state)    
-                _out, _, _, _, _ = distributed_roll_out(x, y_spontaneous, w_spontaneous)
-                gray_state = tuple(_out[1:])
-                strategy.run(reset_state, args=(reset_type, gray_state))
-                return gray_state
-            else:
-                strategy.run(reset_state, args=(reset_type, gray_state))
-        else:
-            strategy.run(reset_state, args=(reset_type, zero_state))
+    # def distributed_reset_state(reset_type, gray_state=None):
+    #     if reset_type == 'gray':
+    #         if gray_state is None:
+    #             # Generate LGN spikes
+    #             x = generate_spontaneous_spikes(spontaneous_prob)
+    #             tf.nest.map_structure(lambda a, b: a.assign(b), state_variables, zero_state)    
+    #             _out, _, _, _, _ = distributed_roll_out(x, y_spontaneous, w_spontaneous)
+    #             gray_state = tuple(_out[1:])
+    #             strategy.run(reset_state, args=(reset_type, gray_state))
+    #             return gray_state
+    #         else:
+    #             strategy.run(reset_state, args=(reset_type, gray_state))
+    #     else:
+    #         strategy.run(reset_state, args=(reset_type, zero_state))
+
+    def generate_gray_state():
+        # Generate LGN spikes
+        x = generate_spontaneous_spikes(spontaneous_prob)
+        tf.nest.map_structure(lambda a, b: a.assign(b), state_variables, zero_state) 
+        # Simulate the network with a gray screen   
+        _out, _, _, _, _ = distributed_roll_out(x, y_spontaneous, w_spontaneous)
+        return tuple(_out[1:])
+    
+    def reset_state(new_state):
+        tf.nest.map_structure(lambda a, b: a.assign(b), state_variables, new_state)
+
+    # @tf.function
+    def distributed_reset_state(new_state):
+        strategy.run(reset_state, args=(new_state,))
 
     def get_next_chunknum(chunknum, seq_len, direction='up'):
         # get the next chunk number (diviser) for seq_len.
@@ -779,7 +797,9 @@ def main(_):
     for epoch in range(n_prev_epochs, n_prev_epochs + flags.n_epochs):
         callbacks.on_epoch_start()  
         # Reset the model state to the gray state  
-        gray_state = distributed_reset_state('gray')  
+        # gray_state = distributed_reset_state('gray')  
+        gray_state = generate_gray_state()
+        distributed_reset_state(gray_state)
         
         # Load the dataset iterator - this must be done inside the epoch loop
         it = iter(train_data_set)
@@ -792,9 +812,11 @@ def main(_):
             callbacks.on_step_start()
             # try resetting every iteration
             if flags.reset_every_step:
-                distributed_reset_state('gray')
-            else:
-                distributed_reset_state('gray', gray_state=gray_state)
+                gray_state = generate_gray_state()
+            #     distributed_reset_state('gray')
+            # else:
+            #     distributed_reset_state('gray', gray_state=gray_state)
+            distributed_reset_state(gray_state)
 
             x, y, _, w = next(it) # x dtype tf.bool
             # Generate LGN spikes
@@ -867,6 +889,8 @@ def main(_):
 
         #     gray_state = distributed_reset_state('gray')  
         #     distributed_reset_state('gray', gray_state=gray_state)
+            # gray_state = generate_gray_state()
+            # distributed_reset_state(gray_state)
 
         #     # v1_spikes_spont, lm_spikes_spont, bkg_noise = distributed_validation_step(x_spontaneous, y, w, output_spikes=True) 
         #     # v1_spikes, lm_spikes, _ = distributed_validation_step(x, y, w, output_spikes=True)
@@ -967,8 +991,9 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_integer('validation_examples', 16, '')
     absl.app.flags.DEFINE_integer('seed', 3000, '')
     absl.app.flags.DEFINE_integer('neurons_per_output', 16, '')
+    absl.app.flags.DEFINE_integer('n_trials_per_angle', 10, '')
 
-    absl.app.flags.DEFINE_boolean('float16', False, '')
+    # absl.app.flags.DEFINE_boolean('float16', False, '')
     absl.app.flags.DEFINE_boolean('caching', True, '')
     absl.app.flags.DEFINE_boolean('core_only', False, '')
     absl.app.flags.DEFINE_boolean('core_loss', False, '')

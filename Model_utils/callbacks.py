@@ -875,7 +875,7 @@ class Callbacks:
 
     def on_epoch_end(self, x, v1_spikes, lm_spikes, y, metric_values, bkg_noise=None, verbose=True, x_spont=None, v1_spikes_spont=None, lm_spikes_spont=None):
         
-        if v1_spikes.dtype == tf.float16:
+        if self.flags.dtype != 'float32':
             v1_spikes = v1_spikes.numpy().astype(np.float32)
             lm_spikes = lm_spikes.numpy().astype(np.float32)
             x = x.numpy().astype(np.float32)
@@ -884,13 +884,22 @@ class Callbacks:
                 x_spont = x_spont.numpy().astype(np.float32)
                 v1_spikes_spont = v1_spikes_spont.numpy().astype(np.float32)
                 lm_spikes_spont = lm_spikes_spont.numpy().astype(np.float32)
+        else:
+            v1_spikes = v1_spikes.numpy()
+            lm_spikes = lm_spikes.numpy()
+            x = x.numpy()
+            y = y.numpy()
+            if x_spont is not None:
+                x_spont = x_spont.numpy()
+                v1_spikes_spont = v1_spikes_spont.numpy()
+                lm_spikes_spont = lm_spikes_spont.numpy()
         
         self.step = 0
         if self.initial_metric_values is None:
             self.initial_metric_values = metric_values
         
         if verbose:
-            print_str = f'  Validation:  - Angle: {y[0][0]:.2f}\n' 
+            print_str = f'  Validation:  - Angle: {float(y[0][0]):.2f}\n' 
             val_values = metric_values[len(metric_values)//2:]
             print_str += '    ' + compose_str(val_values) 
             print(print_str)
@@ -975,7 +984,7 @@ class Callbacks:
     def on_step_end(self, train_values, y, verbose=True):
         self.step_running_time.append(time() - self.step_init_time)
         if verbose:
-            print_str = f'  Step {self.step:2d}/{self.flags.steps_per_epoch} - Angle: {y[0][0]:.2f}\n'
+            print_str = f'  Step {self.step:2d}/{self.flags.steps_per_epoch} - Angle: {float(y[0][0]):.2f}\n'
             print_str += '    ' + compose_str(train_values)
             print(print_str)
             tf.print(print_str)
@@ -1018,7 +1027,6 @@ class Callbacks:
     
     def plot_raster(self, x, v1_spikes, lm_spikes, y):
         seq_len = v1_spikes.shape[1]
-
         images_dir = os.path.join(self.logdir, 'Raster_plots')
         os.makedirs(images_dir, exist_ok=True)
         graph = InputActivityFigure(
