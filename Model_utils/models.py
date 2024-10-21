@@ -878,7 +878,7 @@ class BillehColumn(tf.keras.layers.Layer):
             new_indices[:, 0],
             num_segments=self.recurrent_dense_shape[0]
         )
-        # i_rec = tf.cast(i_rec, dtype=self.compute_dtype)
+
         if i_rec.dtype != self.compute_dtype:
             i_rec = tf.cast(i_rec, dtype=self.compute_dtype)
         # # Add batch dimension
@@ -896,18 +896,19 @@ class BillehColumn(tf.keras.layers.Layer):
         # sparse matrix multiplication for those rows.
         if self.interarea_indices[column_order] is None:
             return tf.zeros((self._n_receptors * self._n_neurons), dtype=self.compute_dtype)
+        
         # find the non-zero rows of rec_z_buf
         non_zero_cols = tf.where(interarea_z_bufs > 0)[:, 1]
         new_indices, inds = get_new_inds_table(self.interarea_indices[column_order], non_zero_cols, self.pre_interarea_ind_table[column_order])        
-        # Sort the segment IDs and corresponding data
-        sorted_indices = tf.argsort(new_indices[:, 0])
-        sorted_segment_ids = tf.gather(new_indices[:, 0], sorted_indices)
-        sorted_inds = tf.gather(inds, sorted_indices)
-        sorted_weights = tf.gather(self.interarea_weight_values[column_order], sorted_inds)
+        # # Sort the segment IDs and corresponding data
+        # sorted_indices = tf.argsort(new_indices[:, 0])
+        # sorted_segment_ids = tf.gather(new_indices[:, 0], sorted_indices)
+        # sorted_inds = tf.gather(inds, sorted_indices)
+        sorted_weights = tf.gather(self.interarea_weight_values[column_order], inds)
         # Calculate the contribution of the interarea currents
         i_interarea = tf.math.unsorted_segment_sum(
             sorted_weights,
-            sorted_segment_ids,
+            new_indices[:, 0],
             num_segments=self.interarea_dense_shapes[column_order][0]
         )
         # Add batch dimension
