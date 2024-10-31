@@ -193,8 +193,6 @@ def main(_):
         else:
             print(f"Invalid optimizer: {flags.optimizer}")
             raise ValueError
-        
-        optimizer.build(model.trainable_variables)
 
         # Restore model and optimizer from a checkpoint if it exists
         if flags.ckpt_dir != '' and os.path.exists(os.path.join(flags.ckpt_dir, flags.restore_from)):
@@ -203,6 +201,7 @@ def main(_):
             checkpoint_directory = tf.train.latest_checkpoint(os.path.join(flags.ckpt_dir, flags.restore_from))
             checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
             checkpoint.restore(checkpoint_directory).expect_partial() #.assert_consumed()
+            optimizer.build(model.trainable_variables)
             if flags.restore_from == "Best_model":
                 logdir = checkpoint_directory + "_results"
             print('Checkpoint restored!')
@@ -213,6 +212,7 @@ def main(_):
             print(f'Restoring checkpoint from {checkpoint_directory}...')
             checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
             checkpoint.restore(checkpoint_directory).expect_partial() #.assert_consumed()
+            optimizer.build(model.trainable_variables)
             print('Checkpoint restored!')
             print(f'OSI/DSI results for epoch {current_epoch} will be saved in: {logdir}\n')
         else:
@@ -225,7 +225,7 @@ def main(_):
         # Build the model layers
         rsnn_layer = model.get_layer('rsnn')
         # prediction_layer = model.get_layer('prediction')
-        abstract_layer = model.get_layer('abstract_output')
+        # abstract_layer = model.get_layer('abstract_output')
         extractor_model = tf.keras.Model(inputs=model.inputs,
                                          outputs=[rsnn_layer.output, model.output[0], model.output[1]])
 
@@ -255,7 +255,7 @@ def main(_):
         
         # LGN firing rates to the different angles
         DG_angles = np.arange(0, 360, 45)
-        osi_dataset_path = os.path.join('OSI_DSI_dataset', 'lgn_firing_rates.pkl')
+        osi_dataset_path = os.path.join('.cache_lgn', 'osi_dsi_lgn_firing_rates.pkl')
         if not os.path.exists(osi_dataset_path):
             print('Creating OSI/DSI dataset...')
             # Define OSI/DSI dataset
@@ -288,11 +288,8 @@ def main(_):
                 print(f'    Trial running time: {time() - t0:.2f}s')
                 for gpu_id in range(len(strategy.extended.worker_devices)):
                     printgpu(gpu_id=gpu_id)
-                    print(f'    Memory consumption (current - peak) GPU {gpu_id}: {mem_data[0]:.2f} GB - {mem_data[1]:.2f} GB')
 
             # Save the dataset      
-            results_dir = os.path.join("OSI_DSI_dataset")
-            os.makedirs(results_dir, exist_ok=True)
             with open(osi_dataset_path, 'wb') as f:
                 pkl.dump(lgn_firing_rates_dict, f)
             print('OSI/DSI dataset created successfully!')
@@ -460,6 +457,7 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_integer('validation_examples', 16, '')
     absl.app.flags.DEFINE_integer('seed', 3000, '')
     absl.app.flags.DEFINE_integer('neurons_per_output', 16, '')
+    absl.app.flags.DEFINE_integer('n_output', 10, '')
     absl.app.flags.DEFINE_integer('n_trials_per_angle', 10, '')
 
     # absl.app.flags.DEFINE_boolean('float16', False, '')

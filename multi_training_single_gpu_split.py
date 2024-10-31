@@ -192,6 +192,8 @@ def main(_):
             print(f"Invalid optimizer: {flags.optimizer}")
             raise ValueError
         
+        optimizer.build(model.trainable_variables)
+        
         # Restore model and optimizer from a checkpoint if it exists
         if flags.ckpt_dir != '' and os.path.exists(os.path.join(flags.ckpt_dir, "OSI_DSI_checkpoints")):
             checkpoint_directory = tf.train.latest_checkpoint(os.path.join(flags.ckpt_dir, "OSI_DSI_checkpoints"))
@@ -794,6 +796,13 @@ def main(_):
     chunknum = 1
     max_working_fr = {}   # defined for each chunknum
     n_prev_epochs = flags.run_session * flags.n_epochs
+
+    # import datetime
+    # profiler_logdir = f"{logdir}/logs/profile/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    # # Set steps to profile
+    # profile_start_step = 1
+    # profile_end_step = 7
+
     for epoch in range(n_prev_epochs, n_prev_epochs + flags.n_epochs):
         callbacks.on_epoch_start()  
         # Reset the model state to the gray state  
@@ -806,10 +815,11 @@ def main(_):
         # gray_it = iter(gray_data_set)
         
         for step in range(flags.steps_per_epoch):
-            # if step > 2:
-            #     tf.profiler.experimental.start(logdir=logdir)
-            # with tf.profiler.experimental.Trace("Train", step_num=step):
             callbacks.on_step_start()
+            # # Start profiler at specified step
+            # if step == profile_start_step:
+            #     tf.profiler.experimental.start(logdir=logdir)
+
             # try resetting every iteration
             if flags.reset_every_step:
                 gray_state = generate_gray_state()
@@ -831,9 +841,14 @@ def main(_):
                     for j in range(chunknum):
                         x_chunk = x_chunks[j]
                         x_spont_chunk = x_spont_chunks[j]
-                        # step_values = distributed_train_step(x_chunk, y, w, x_spont_chunk, trim=chunknum==1, output_metrics=True)
+                        # model_spikes, step_values = distributed_split_train_step(x_chunk, y, w, x_spont_chunk, trim=chunknum==1)
+                        # Profile specific steps
+                        # if profile_start_step <= step <= profile_end_step:
+                        #     with tf.profiler.experimental.Trace('train', step_num=step, _r=1):
+                        #         model_spikes, step_values = distributed_split_train_step(x_chunk, y, w, x_spont_chunk, trim=chunknum==1)
+                        # else:
                         model_spikes, step_values = distributed_split_train_step(x_chunk, y, w, x_spont_chunk, trim=chunknum==1)
-                        # step_values = distributed_train_step(x, y, w, trim=chunknum==1)
+  
                     break
                 except tf.errors.ResourceExhaustedError as e:
                     print("OOM error occurred!")
@@ -874,6 +889,9 @@ def main(_):
                         tf.keras.backend.clear_session()
                         print("Tentatively decreasing chunknum to: ", chunknum)
 
+            # # Stop profiler after profiling steps
+            # if step == profile_end_step:
+            #     tf.profiler.experimental.stop()
             callbacks.on_step_end(step_values, y, verbose=True)
             # print('Max_rates: ', chunknum, current_fr, max_working_fr)
 

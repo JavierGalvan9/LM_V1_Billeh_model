@@ -37,15 +37,25 @@ def printgpu(gpu_id=0):
 
 
 def compose_str(metrics_values):
-        _acc, _loss, _rate, _rate_loss, _voltage_loss, _regularizer_loss, _osi_dsi_loss, _sync_loss = metrics_values
-        _s = f'Loss {_loss:.4f}, '
-        _s += f'RLoss {_rate_loss:.4f}, '
-        _s += f'VLoss {_voltage_loss:.4f}, '
-        _s += f'RegLoss {_regularizer_loss:.4f}, '
-        _s += f'OLoss {_osi_dsi_loss:.4f}, '
-        _s += f'SLoss {_sync_loss:.4f}, '
-        _s += f'Accuracy {_acc:.4f}, '
-        _s += f'Rate {_rate:.4f}'
+        if len(metrics_values) == 8:
+            _acc, _loss, _rate, _rate_loss, _voltage_loss, _regularizer_loss, _osi_dsi_loss, _sync_loss = metrics_values
+            _s = f'Loss {_loss:.4f}, '
+            _s += f'RLoss {_rate_loss:.4f}, '
+            _s += f'VLoss {_voltage_loss:.4f}, '
+            _s += f'RegLoss {_regularizer_loss:.4f}, '
+            _s += f'OLoss {_osi_dsi_loss:.4f}, '
+            _s += f'SLoss {_sync_loss:.4f}, '
+            _s += f'Accuracy {_acc:.4f}, '
+            _s += f'Rate {_rate:.4f}'
+        else:
+            _acc, _loss, _rate, _rate_loss, _voltage_loss, _regularizer_loss, _classification_loss = metrics_values
+            _s = f'Loss {_loss:.4f}, '
+            _s += f'RLoss {_rate_loss:.4f}, '
+            _s += f'VLoss {_voltage_loss:.4f}, '
+            _s += f'RegLoss {_regularizer_loss:.4f}, '
+            _s += f'CLoss {_classification_loss:.4f}, '
+            _s += f'Accuracy {_acc:.4f}, '
+            _s += f'Rate {_rate:.4f}'
         return _s
 
 def compute_ks_statistics(df, metric='Weight', min_n_sample=15):
@@ -739,6 +749,287 @@ class OsiDsiCallbacks:
         fig2.savefig(os.path.join(spontaneous_boxplots_dir, f'epoch_{self.current_epoch}.png'), dpi=300, transparent=False)
         plt.close()  
         
+
+class ClassificationCallbacks:
+    def __init__(self, networks, model, optimizer, flags, logdir, strategy, 
+                metrics_keys, pre_delay=50, post_delay=50, checkpoint=None, model_variables_init=None, 
+                save_optimizer=True):
+
+        self.n_neurons = {'v1': networks['v1']['n_nodes'], 'lm': networks['lm']['n_nodes']}
+        self.networks = networks
+        self.model = model
+        self.optimizer = optimizer
+        self.flags = flags
+        self.logdir = logdir
+        self.strategy = strategy
+        self.metrics_keys = metrics_keys
+        self.neuropixels_feature = 'Spontaneous rate (Hz)'
+        self.pre_delay = pre_delay
+        self.post_delay = post_delay
+        self.step = 0
+        self.step_running_time = []
+        self.model_variables_dict = model_variables_init
+        self.initial_metric_values = None
+        self.summary_writer = tf.summary.create_file_writer(self.logdir)
+        with open(os.path.join(self.logdir, 'config.json'), 'w') as f:
+            json.dump(flags.flag_values_dict(), f, indent=4)
+    
+        if checkpoint is None:
+            if save_optimizer:
+                checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
+            else:
+                checkpoint = tf.train.Checkpoint(model=model)
+            self.min_val_loss = float('inf')
+            self.no_improve_epochs = 0
+            self.checkpoint_epochs = 0
+            # create a dictionary to save the values of the metric keys after each epoch
+            self.epoch_metric_values = {key: [] for key in self.metrics_keys}
+        else:
+            # Load epoch_metric_values and min_val_loss from the file
+            if os.path.exists(os.path.join(self.logdir, 'train_end_data.pkl')):
+                with open(os.path.join(self.logdir, 'train_end_data.pkl'), 'rb') as f:
+                    data_loaded = pkl.load(f)
+                self.epoch_metric_values = data_loaded['epoch_metric_values']
+                self.min_val_loss = data_loaded['min_val_loss']
+                self.no_improve_epochs = data_loaded['no_improve_epochs']
+                self.checkpoint_epochs = len(data_loaded['epoch_metric_values']['train_loss'])
+            elif os.path.exists(os.path.join(os.path.dirname(flags.restore_from), 'train_end_data.pkl')):
+                with open(os.path.join(os.path.dirname(flags.restore_from), 'train_end_data.pkl'), 'rb') as f:
+                    data_loaded = pkl.load(f)
+                self.epoch_metric_values = {key: [] for key in self.metrics_keys}
+                self.min_val_loss = float('inf')
+                self.no_improve_epochs = 0
+                self.checkpoint_epochs = 0
+            else:
+                print('No train_end_data.pkl file found. Initializing...')
+                self.epoch_metric_values = {key: [] for key in self.metrics_keys}
+                self.min_val_loss = float('inf')
+                self.no_improve_epochs = 0
+                self.checkpoint_epochs = 0
+
+        self.total_epochs = flags.n_runs * flags.n_epochs + self.checkpoint_epochs
+        # Manager for the best model
+        self.best_manager = tf.train.CheckpointManager(
+            checkpoint, directory=self.logdir + '/Best_model', max_to_keep=1
+        )
+        # Manager for osi/dsi checkpoints 
+        self.epoch_manager = tf.train.CheckpointManager(
+            checkpoint, directory=self.logdir + '/Classification_checkpoints', max_to_keep=5
+        )
+
+    def on_train_begin(self):
+        print("---------- Training started at ", dt.datetime.now().strftime('%d-%m-%Y %H:%M'), ' ----------\n')
+        self.train_start_time = time()
+        # self.epoch = self.flags.run_session * self.flags.n_epochs
+        self.epoch = self.checkpoint_epochs
+        # # Clear the session to reset the graph state
+        # tf.keras.backend.clear_session()
+
+    def on_train_end(self, metric_values):
+        self.train_end_time = time()
+        self.final_metric_values = metric_values
+        print("\n ---------- Training ended at ", dt.datetime.now().strftime('%d-%m-%Y %H:%M'), ' ----------\n')
+        print(f"Total time spent: {self.train_end_time - self.train_start_time:.2f} seconds")
+        print(f"Average step time: {np.mean(self.step_running_time):.2f} seconds\n")
+        # Determine the maximum key length for formatting the table
+        max_key_length = max(len(key) for key in self.metrics_keys)
+
+        # Start of the Markdown table
+        print(f"| {'Metric':<{max_key_length}} | {'Initial Value':<{max_key_length}} | {'Final Value':<{max_key_length}} |")
+        print(f"|{'-' * (max_key_length + 2)}|{'-' * (max_key_length + 2)}|{'-' * (max_key_length + 2)}|")
+
+        n_metrics = len(self.initial_metric_values)//2
+        for initial, final, key in zip(self.initial_metric_values[n_metrics:], self.final_metric_values[n_metrics:], self.metrics_keys[n_metrics:]):
+            print(f"| {key:<{max_key_length}} | {initial:<{max_key_length}.3f} | {final:<{max_key_length}.3f} |")
+
+        # Save epoch_metric_values and min_val_loss to a file
+        data_to_save = {
+            'epoch_metric_values': self.epoch_metric_values,
+            'min_val_loss': self.min_val_loss,
+            'no_improve_epochs': self.no_improve_epochs
+        }
+
+        with open(os.path.join(self.logdir, 'train_end_data.pkl'), 'wb') as f:
+            pkl.dump(data_to_save, f)
+
+        if self.flags.n_runs > 1:
+            self.plot_osi_dsi(parallel=True)
+
+    def on_epoch_start(self):
+        self.epoch += 1
+        # self.step_counter.assign_add(1)
+        self.epoch_init_time = time()
+        date_str = dt.datetime.now().strftime('%d-%m-%Y %H:%M')
+        print(f'Epoch {self.epoch:2d}/{self.total_epochs} @ {date_str}')
+        tf.print(f'Epoch {self.epoch:2d}/{self.total_epochs} @ {date_str}')
+
+    def on_epoch_end(self, x, v1_spikes, lm_spikes, y, metric_values, verbose=True):
+        
+        if self.flags.dtype != 'float32':
+            v1_spikes = v1_spikes.numpy().astype(np.float32)
+            lm_spikes = lm_spikes.numpy().astype(np.float32)
+            x = x.numpy().astype(np.float32)
+            y = y.numpy().astype(np.float32)
+        else:
+            v1_spikes = v1_spikes.numpy()
+            lm_spikes = lm_spikes.numpy()
+            x = x.numpy()
+            y = y.numpy()
+        
+        self.step = 0
+        if self.initial_metric_values is None:
+            self.initial_metric_values = metric_values
+        
+        if verbose:
+            print_str = f'  Validation:  - Angle: {float(y[0][0]):.2f}\n' 
+            val_values = metric_values[len(metric_values)//2:]
+            print_str += '    ' + compose_str(val_values) 
+            print(print_str)
+            for gpu_id in range(len(self.strategy.extended.worker_devices)):
+                printgpu(gpu_id=gpu_id)
+
+        for i, (key, value) in enumerate(self.epoch_metric_values.items()):
+            self.epoch_metric_values[key] = value + [metric_values[i]]
+
+
+        # self.epoch_metric_values = {key: value + [metric_values[i]] for i, (key, value) in enumerate(self.epoch_metric_values.items())}
+
+        if 'val_loss' in self.metrics_keys:
+            val_loss_index = self.metrics_keys.index('val_loss')
+            val_loss_value = metric_values[val_loss_index]
+        else:
+            val_loss_index = self.metrics_keys.index('train_loss')
+            val_loss_value = metric_values[val_loss_index]
+
+        self.plot_losses_curves()
+        # self.plot_synchronization_evolution(v1_spikes, lm_spikes, v1_spikes_spont, lm_spikes_spont)
+
+        if val_loss_value < self.min_val_loss:
+            self.min_val_loss = val_loss_value
+            self.no_improve_epochs = 0
+            self.save_best_model()
+            self.plot_mean_firing_rate_boxplot(v1_spikes, lm_spikes, y)
+            self.plot_raster(x, v1_spikes, lm_spikes, y)
+            self.model_variables_dict['Best'] = {var.name: var.numpy().astype(np.float16) for var in self.model.trainable_variables}
+        else:
+            self.no_improve_epochs += 1
+           
+        with self.summary_writer.as_default():
+            for k, v in zip(self.metrics_keys, metric_values):
+                tf.summary.scalar(k, v, step=self.epoch)
+
+        # EARLY STOPPING CONDITIONS
+        if (0 < self.flags.max_time < (time() - self.epoch_init_time) / 3600):
+            print(f'[ Maximum optimization time of {self.flags.max_time:.2f}h reached ]')
+            stop = True
+        elif self.no_improve_epochs >= 500:
+            print("Early stopping: Validation loss has not improved for 50 epochs.")
+            stop = True  
+        else:
+            stop = False
+
+        return stop
+
+    def on_step_start(self):
+        self.step += 1
+        self.step_init_time = time()
+        # reset the gpu memory stat
+        tf.config.experimental.reset_memory_stats('GPU:0')
+
+    def on_step_end(self, train_values, y, verbose=True):
+        self.step_running_time.append(time() - self.step_init_time)
+        if verbose:
+            print_str = f'  Step {self.step:2d}/{self.flags.steps_per_epoch} - Angle: {float(y[0][0]):.2f}\n'
+            print_str += '    ' + compose_str(train_values)
+            print(print_str)
+            tf.print(print_str)
+            print(f'    Step running time: {time() - self.step_init_time:.2f}s')
+            for gpu_id in range(len(self.strategy.extended.worker_devices)):
+                printgpu(gpu_id=gpu_id)
+        
+    def save_best_model(self):
+        # self.step_counter.assign_add(1)
+        print(f'[ Saving the model at epoch {self.epoch} ]')
+        try:
+            p = self.best_manager.save(checkpoint_number=self.epoch)
+            print(f'Model saved in {p}\n')
+        except:
+            print("Saving failed. Maybe next time?")
+
+    def plot_losses_curves(self):
+        plotting_metrics = ['val_loss', 'val_rate_loss', 'val_voltage_loss', 'val_regularizer_loss', 'val_classification_loss','val_accuracy']
+        images_dir = os.path.join(self.logdir, 'Loss_curves')
+        os.makedirs(images_dir, exist_ok=True)
+
+        # start_epoch = 6 if self.epoch > 5 else 1
+        start_epoch = 1
+        epochs = range(start_epoch, self.epoch + 1)
+
+        fig, axs = plt.subplots(3, 2, figsize=(12, 18))
+        axs = axs.ravel()  # Flatten the array for easy indexing
+        for i, metric_key in enumerate(plotting_metrics):
+            ax = axs[i]
+            if metric_key == 'val_loss':
+                color = 'red'
+            else:
+                color = 'blue'
+            ax.plot(epochs, self.epoch_metric_values[metric_key][start_epoch-1:], color=color)
+            ax.set_xlabel('Epoch')
+            ax.set_ylabel(metric_key)
+        plt.tight_layout()
+        plt.savefig(os.path.join(images_dir, f'classification_losses_curves_epoch.png'), dpi=300, transparent=False)
+        plt.close()
+    
+    def plot_raster(self, x, v1_spikes, lm_spikes, y):
+        seq_len = v1_spikes.shape[1]
+        images_dir = os.path.join(self.logdir, 'Classification_Raster_plots')
+        os.makedirs(images_dir, exist_ok=True)
+        graph = InputActivityFigure(
+                                    self.networks,
+                                    self.flags.data_dir,
+                                    images_dir,
+                                    filename=f'Epoch_{self.epoch}',
+                                    frequency=self.flags.temporal_f,
+                                    stimuli_init_time=self.pre_delay,
+                                    stimuli_end_time=seq_len-self.post_delay,
+                                    reverse=False,
+                                    plot_core_only=True,
+                                    )
+        graph(x, v1_spikes, lm_spikes)
+
+    def plot_mean_firing_rate_boxplot(self, v1_spikes, lm_spikes, y):
+        seq_len = v1_spikes.shape[1]
+        DG_angles = y
+        boxplots_dir = os.path.join(self.logdir, f'Boxplots_classification/{self.neuropixels_feature}')
+        os.makedirs(boxplots_dir, exist_ok=True)
+        fig, axs = plt.subplots(2, 1, figsize=(12, 14))
+        for axis_id, spikes, area in zip([0, 1], [v1_spikes, lm_spikes], ['v1', 'lm']):
+            if self.neuropixels_feature == "Ave_Rate(Hz)":
+                metrics_analysis = ModelMetricsAnalysis(spikes, DG_angles, self.networks[area], data_dir=self.flags.data_dir, 
+                                                        drifting_gratings_init=self.pre_delay, drifting_gratings_end=seq_len-self.post_delay,
+                                                        area=area, analyze_core_only=True, df_directory=self.logdir, save_df=False) 
+            elif self.neuropixels_feature == 'Spontaneous rate (Hz)':
+                metrics_analysis = ModelMetricsAnalysis(spikes, DG_angles, self.networks[area], data_dir=self.flags.data_dir, 
+                                                        spontaneous_init=self.pre_delay, spontaneous_end=seq_len-self.post_delay,
+                                                        area=area, analyze_core_only=True, df_directory=self.logdir, save_df=False) 
+            
+            # Figure for Average firing rate boxplots
+            metrics_analysis(metrics=[self.neuropixels_feature], axis=axs[axis_id], directory=boxplots_dir, filename=f'{area}_epoch_{self.epoch}')   
+                       
+        plt.tight_layout()
+        plt.savefig(os.path.join(boxplots_dir, f'epoch_{self.epoch}.png'), dpi=300, transparent=False)
+        plt.close()
+
+    def plot_osi_dsi(self, parallel=False):
+        print('Starting to plot OSI and DSI...')
+        # Save the checkpoint to reload weights in the osi_dsi_estimator
+        if parallel:
+            p = self.epoch_manager.save(checkpoint_number=self.epoch)
+            print(f'Checkpoint model saved in {p}\n')
+        else:            
+            print(f'Not running OSI/DSI analysis.')
+            pass
+                    
 
 class Callbacks:
     def __init__(self, networks, lgn_inputs, bkg_inputs, model, optimizer, distributed_roll_out, flags, logdir, strategy, 

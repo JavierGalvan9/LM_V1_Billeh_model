@@ -10,8 +10,57 @@ sys.path.append(os.path.join(os.getcwd(), "Model_utils"))
 import other_billeh_utils
 
 
+class IndividualStiffRegularizer(Layer):
+    def __init__(self, strength, network, penalize_relative_change=False, recurrent_weights=True, source_area='lm', 
+                 initial_values=None, dtype=tf.float32):
+        self._strength = tf.cast(strength, dtype)
+        self._dtype = dtype
+        self._penalize_relative_change = penalize_relative_change
+
+        if initial_values is not None:
+            initial_value = np.copy(initial_values).astype(np.float32)
+        else:
+            # Compute voltage scale
+            voltage_scale = (network['node_params']['V_th'] - network['node_params']['E_L']).astype(np.float32)
+            # Get the initial weights and properly scale them down
+            if recurrent_weights:
+                indices = network["synapses"]["indices"]
+                initial_value = np.array(network["synapses"]["weights"], dtype=np.float32)
+            else:
+                indices = network['interarea_synapses'][source_area]["indices"]
+                initial_value = np.array(network['interarea_synapses'][source_area]["weights"], dtype=np.float32)
+
+            # Scale initial values by the voltage scale of the node IDs
+            voltage_scale_node_ids = voltage_scale[network['node_type_ids'][indices[:, 0]]]
+            initial_value /= voltage_scale_node_ids
+
+        if self._penalize_relative_change:
+            epsilon = np.float32(1e-2)
+            denominator = np.maximum(np.abs(initial_value), epsilon)
+            self._denominator = tf.constant(denominator, dtype=tf.float32)
+
+        self._target_mean_weights = tf.constant(initial_value, dtype=tf.float32)
+    
+    @tf.function(jit_compile=True)
+    def __call__(self, x):
+
+        if len(x.shape) > 1 and x.shape[1] == 1:
+            x = tf.squeeze(x, axis=1)
+
+        if self._penalize_relative_change:
+            # return self._strength * tf.reduce_mean(tf.abs(x - self._initial_value))
+            relative_deviation = (x - self._target_mean_weights) / self._denominator
+            # Penalize the relative deviation
+            reg_loss = tf.sqrt(tf.reduce_mean(tf.square(relative_deviation)))
+        else:
+            reg_loss = tf.reduce_mean(tf.square(x - self._target_mean_weights))
+        
+        return tf.cast(reg_loss, dtype=self._dtype) * self._strength
+    
+
 class StiffRegularizer(Layer):
-    def __init__(self, strength, network, penalize_relative_change=False, recurrent_weights=True, source_area='lm', dtype=tf.float32):
+    def __init__(self, strength, network, penalize_relative_change=False, recurrent_weights=True, source_area='lm', 
+                 initial_values=None, dtype=tf.float32):
         self._strength = tf.cast(strength, dtype)
         self._dtype = dtype
         self._penalize_relative_change = penalize_relative_change
@@ -30,6 +79,10 @@ class StiffRegularizer(Layer):
         # Scale initial values by the voltage scale of the node IDs
         voltage_scale_node_ids = voltage_scale[network['node_type_ids'][indices[:, 0]]]
         initial_value /= voltage_scale_node_ids
+
+        if initial_values is not None:
+            initial_value = np.copy(initial_values).astype(np.float32)
+
         # Find unique values and their first occurrence indices
         unique_edge_types, self.idx = np.unique(edge_type_ids, return_inverse=True)
         # Sort first_occurrence_indices to maintain the order of first appearances
@@ -66,30 +119,38 @@ class StiffRegularizer(Layer):
 
 
 class L2Regularizer(tf.keras.regularizers.Regularizer):
-    def __init__(self, strength, network, flags, penalize_relative_change=False, recurrent_weights=True, source_area='lm', dtype=tf.float32):
+    def __init__(self, strength, network, penalize_relative_change=False, recurrent_weights=True, source_area='lm', 
+                 initial_values=None, dtype=tf.float32):
         super().__init__()
         self._strength = strength
         self._dtype = dtype
         self._penalize_relative_change = penalize_relative_change
+        # Compute voltage scale
+        voltage_scale = (network['node_params']['V_th'] - network['node_params']['E_L']).astype(np.float32)
+
         if penalize_relative_change:
             # Get the initial weights and properly scale them down
             if recurrent_weights:
-                indices = np.array(network["synapses"]["indices"], dtype=tf.int32)
-                weights = np.array(network["synapses"]["weights"], dtype=np.float32)
+                indices = network["synapses"]["indices"]
+                initial_value = np.array(network["synapses"]["weights"], dtype=np.float32)
             else:
-                indices = np.array(network['interarea_synapses'][source_area]["indices"], dtype=tf.int32)
-                weights = np.array(network['interarea_synapses'][source_area]["weights"], dtype=np.float32)
+                indices = network['interarea_synapses'][source_area]["indices"]
+                initial_value = np.array(network['interarea_synapses'][source_area]["weights"], dtype=np.float32)
 
-            _params = dict(network['node_params'])
-            voltage_scale = _params['V_th'] - _params['E_L']
-            _node_type_ids = network['node_type_ids']
-            initial_value = (weights/voltage_scale[_node_type_ids[indices[:, 0]]]) / flags.lr_scale
+            # Scale initial values by the voltage scale of the node IDs
+            voltage_scale_node_ids = voltage_scale[network['node_type_ids'][indices[:, 0]]]
+            initial_value /= voltage_scale_node_ids
+
             # using the edge_type ids group calculate the mean weight of each type of edge in the network and then create a constant with same shape as weights and with each value corresponding to the populations mean
             # Calculate mean weights for each edge type
             if recurrent_weights:
                 edge_type_ids = np.array(network['synapses']['edge_type_ids'])
             else:
                 edge_type_ids = np.array(network['interarea_synapses'][source_area]["edge_type_ids"])
+
+            if initial_values is not None:
+                initial_value = np.copy(initial_values).astype(np.float32)
+
             unique_edge_type_ids, inverse_indices = np.unique(edge_type_ids, return_inverse=True)
             mean_weights = np.array([np.mean(initial_value[edge_type_ids == edge_type_id]) for edge_type_id in unique_edge_type_ids])
             # Create target mean weights array based on the edge type indices

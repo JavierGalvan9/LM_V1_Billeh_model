@@ -478,33 +478,35 @@ def load_billeh(flags, n_neurons, flag_str=''):
                                             random_weights=flags.random_weights)
         networks[column_name] = set_laminar_indices(networks[column_name], column_name=column_name, data_dir = flags.data_dir)
 
-        ###### Select random l5e neurons for tracking output #########
-        # df = pd.read_csv(os.path.join(
-        #     flags.data_dir, "network/v1_node_types.csv"), delimiter=" ")
+        ##### Select random l5e neurons for tracking output #########
+        df = pd.read_csv(os.path.join(
+            flags.data_dir, "network/v1_node_types.csv"), delimiter=" ")
         
-        # l5e_types_indices = []
-        # for a in df.iterrows():
-        #     if a[1]["pop_name"].startswith("e5"):
-        #         l5e_types_indices.append(a[0])
-        # l5e_types_indices = np.array(l5e_types_indices)
-        # l5e_neuron_sel = np.zeros(network["n_nodes"], np.bool_)
-        # for l5e_type_index in l5e_types_indices:
-        #     is_l5_type = network["node_type_ids"] == l5e_type_index
-        #     l5e_neuron_sel = np.logical_or(l5e_neuron_sel, is_l5_type)
-        # network["l5e_types"] = l5e_types_indices
-        # network["l5e_neuron_sel"] = l5e_neuron_sel
-        # print(f"> Number of L5e Neurons: {np.sum(l5e_neuron_sel)}")
+        l5e_types_indices = []
+        for a in df.iterrows():
+            if a[1]["pop_name"].startswith("e5"):
+                l5e_types_indices.append(a[0])
+        l5e_types_indices = np.array(l5e_types_indices)
+        l5e_neuron_sel = np.zeros(networks[column_name]["n_nodes"], np.bool_)
+        for l5e_type_index in l5e_types_indices:
+            is_l5_type = networks[column_name]["node_type_ids"] == l5e_type_index
+            l5e_neuron_sel = np.logical_or(l5e_neuron_sel, is_l5_type)
+        networks[column_name]["l5e_types"] = l5e_types_indices
+        networks[column_name]["l5e_neuron_sel"] = l5e_neuron_sel
+        print(f"> Number of L5e Neurons: {np.sum(l5e_neuron_sel)}")
 
-        # # assert that you have enough l5 neurons for all the outputs and then choose n_output * neurons_per_output random neurons
-        # # assert np.sum(l5e_neuron_sel) > n_output * neurons_per_output
-        # rd = np.random.RandomState(seed=flags.seed)
-        # l5e_neuron_indices = np.where(l5e_neuron_sel)[0]
-        # readout_neurons = rd.choice(
-        #     l5e_neuron_indices, size=flags.n_output * flags.neurons_per_output, replace=False
-        # )
-        # readout_neurons = readout_neurons.reshape((flags.n_output, flags.neurons_per_output))
-        # network["readout_neuron_ids"] = readout_neurons
-        # #########################################
+        # assert that you have enough l5 neurons for all the outputs and then choose n_output * neurons_per_output random neurons
+        assert np.sum(l5e_neuron_sel) > flags.n_output * flags.neurons_per_output
+        rd = np.random.RandomState(seed=flags.seed)
+        l5e_neuron_indices = np.where(l5e_neuron_sel)[0]
+        readout_neurons = rd.choice(
+            l5e_neuron_indices, size=flags.n_output * flags.neurons_per_output, replace=False
+        )
+        readout_neurons = readout_neurons.reshape((flags.n_output, flags.neurons_per_output))
+        for i in range(10):
+            # networks[column_name][f'localized_readout_neuron_ids_{i}'] = readout_neurons_random[i,:][None,:]
+            networks[column_name][f"readout_neuron_ids_{i}"] = readout_neurons[i,:][None,:]
+        #########################################
 
         if column_name == 'v1':
             lgn_input = load_input(
