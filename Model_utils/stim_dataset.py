@@ -149,8 +149,15 @@ def generate_drifting_grating_tuning(orientation=None, temporal_f=2, cpd=0.04, c
     return data_set
 
 
+@tf.function
+def preprocess_lgn_image(image, contrast, im_slice):
+    # Resize and normalize the image
+    img = tf.image.resize_with_pad(image, 120, 240, method='lanczos5')
+    img = tf.tile(tf.expand_dims(img, axis=0), (im_slice, 1, 1, 1))  # Replicate for im_slice frames
+    return (img - 0.5) * contrast / 0.5  # Normalize to [-contrast, contrast]
+
 def generate_pure_classification_data_set_from_generator(data_usage=0, contrast=1, im_slice=100, pre_delay=50, post_delay=50,
-                                                         pre_chunks=2, resp_chunks=1, post_chunks=1, current_input=False,
+                                                         pre_chunks=2, resp_chunks=1, post_chunks=1, n_input=17400, current_input=False,
                                                          dataset='mnist', std=0, path=None, imagenet_img_num=60000, rot90=False,
                                                          from_lgn=True, bmtk_compat=True, dtype=tf.float32):
     # data_usage: 0, train; 1, test
@@ -176,13 +183,11 @@ def generate_pure_classification_data_set_from_generator(data_usage=0, contrast=
         purt_imgs = np.clip(purt_imgs, 0, 255)
         all_ds = ((x_train[:imagenet_img_num,...],tf.range(imagenet_img_num, dtype=tf.float32)),(purt_imgs,tf.range(imagenet_img_num, dtype=tf.float32)))
 
-    if data_usage == 0:
-        images, labels = all_ds[data_usage]
-    else:
-        images, labels = all_ds[data_usage]
-        # choose fixed validation set to minimize the variance
-        # images = images[0:1280] # normally, the batch size is 64
-        # labels = labels[0:1280]
+    # Extract the images and labels
+    images, labels = all_ds[data_usage] # 0 for training and 1 for testing
+    # choose fixed validation set to minimize the variance
+    # images = images[0:1280] # normally, the batch size is 64
+    # labels = labels[0:1280]
 
     if std > 0: # images are in the [0, 255] range
         images = images + np.random.randn(*images.shape)*std
@@ -210,36 +215,29 @@ def generate_pure_classification_data_set_from_generator(data_usage=0, contrast=
     def _g():
         for ind in range(images.shape[0]):
             if from_lgn:
-                # LGN model only receives 120 x 240, the core part only receives an eclipse TODO
-                img = tf.image.resize_with_pad(images[ind], 120, 240, method='lanczos5')
-                # maintain the images for a while
-                img = tf.expand_dims(img, axis=0)
-                tiled_img = tf.tile(img, (im_slice, 1, 1, 1))
-                # make it in [-contrast, contrast]
-                tiled_img = (tiled_img - .5) * contrast / .5
+                # # LGN model only receives 120 x 240, the core part only receives an eclipse TODO
+                img = preprocess_lgn_image(images[ind], contrast, im_slice)
             else:
                 # to mimic the 17400 dim of LGN output
                 img = tf.image.resize_with_pad(images[ind], 100, 174, method='lanczos5')
                 # maintain the images for a while
-                img = tf.expand_dims(img, axis=0)
-                tiled_img = tf.tile(img, (im_slice, 1, 1, 1))
+                img = tf.tile(tf.expand_dims(img, axis=0), (im_slice, 1, 1, 1))
 
             # add an empty period before a period of real image for continuing classification
-            videos = movies_concat(tiled_img, pre_delay, post_delay, dtype=dtype)
-            del tiled_img
+            videos = movies_concat(img, pre_delay, post_delay, dtype=dtype)
+            # del img
 
             if from_lgn:
                 spatial = lgn.spatial_response(videos, bmtk_compat)
-                del videos
+                # del videos
                 firing_rates = lgn.firing_rates_from_spatial(*spatial)
-                del spatial
+                # del spatial
             else:
-                firing_rates = tf.reshape(videos, [-1,17400])
+                firing_rates = tf.reshape(videos, [-1,n_input])
             # sample rate
             # assuming dt = 1 ms
             _p = 1 - tf.exp(-firing_rates / 1000.)
-            del firing_rates
-            # _z = tf.cast(fixed_noise < _p, dtype)
+            # del firing_rates
             if current_input:
                 _z = _p * 1.3
                 if not from_lgn:
@@ -251,16 +249,21 @@ def generate_pure_classification_data_set_from_generator(data_usage=0, contrast=
                 _z = tf.random.uniform(tf.shape(_p)) < _p
 
             label = tf.concat([tf.zeros(pre_chunks)] + [labels[ind]*tf.ones(resp_chunks)] + [tf.zeros(post_chunks)],axis=0)
-            weight = tf.concat([0*tf.ones(pre_chunks)] + [tf.ones(resp_chunks)] + [0*tf.ones(post_chunks)],axis=0)
+            weight = tf.concat([tf.zeros(pre_chunks)] + [tf.ones(resp_chunks)] + [tf.zeros(post_chunks)],axis=0)
             # for plotting, label the image when it holds on
             image_labels = tf.concat([tf.zeros(int(pre_delay/chunk_size))] + [labels[ind]*tf.ones(int(im_slice/chunk_size))] + [tf.zeros(int(post_delay/chunk_size))],axis=0)
             yield _z, label, image_labels, weight
 
     output_dtypes = (tf.bool, tf.int32, tf.int32, dtype)
     # when using generator for dataset, it should not contain the batch dim
-    output_shapes = (tf.TensorShape((seq_len, 17400)), tf.TensorShape((n_chunks)), tf.TensorShape((n_chunks)), tf.TensorShape((n_chunks)))
+    output_shapes = (tf.TensorShape((seq_len, n_input)), tf.TensorShape((n_chunks)), tf.TensorShape((n_chunks)), tf.TensorShape((n_chunks)))
     data_set = tf.data.Dataset.from_generator(_g, output_dtypes, output_shapes=output_shapes).map(lambda _a, _b, _c, _d:
                 (tf.cast(_a, tf.bool), tf.cast(_b, tf.int32), tf.cast(_c, tf.int32), tf.cast(_d, dtype)))
+    
+    # Create the dataset using optimized map and prefetch calls
+    data_set = data_set.map(lambda _z, label, image_labels, weight: (_z, label, image_labels, weight), num_parallel_calls=tf.data.AUTOTUNE).prefetch(tf.data.AUTOTUNE)
+
+
     return data_set
 
 
