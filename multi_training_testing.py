@@ -138,35 +138,38 @@ def main():
         json.dump(vars(flags), fp)
 
     # Generate a ticker for the current simulation
-    sim_name = toolkit.get_random_identifier('b_')
-    logdir = os.path.join(results_dir, sim_name)
+    if flags.restore_from == '':
+        sim_name = toolkit.get_random_identifier('b_')
+        logdir = os.path.join(results_dir, sim_name)
+        initial_benchmark_model = ''
+    else:
+        sim_name = os.path.basename(os.path.dirname(flags.restore_from))
+        logdir = os.path.dirname(flags.restore_from) 
+        initial_benchmark_model = flags.restore_from
 
-    # logdir = '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Simulation_results/v1_100000_lm_30000_E4_weight_factor_4.0_random_weights_True/b_5ubj'
-    # sim_name = 'b_5ubj'
+    # logdir = '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Simulation_results/v1_100000_lm_30000/b_690d'
+    # sim_name = 'b_690d'
     print(f'> Results for {flags.task_name} will be stored in:\n {logdir} \n')
 
     # Define the job submission commands for the training and evaluation scripts
     # training_commands = ["run", "-g", "1", "-m", "24", "-t", "1:15"]
     # evaluation_commands = ["run", "-g", "1", "-m", "65", "-t", "0:45"]
-    training_commands = ["run", "-g", f"{flags.n_gpus}", "-G", "L40S", "-c", f"{4 * flags.n_gpus}", "-m", "48", "-t", "24:00"] # L40S choose the particular gpu model for training with 48 GB of memory
-    evaluation_commands = ["run", "-g", "1", "-m", "80", "-c", "4", "-t", "2:00"]
+    training_commands = ["run", "-g", f"{flags.n_gpus}", "-G", "L40S", "-c", f"{4 * flags.n_gpus}", "-m", "200", "-t", "24:00"] # L40S choose the particular gpu model for training with 48 GB of memory
+    evaluation_commands = ["run", "-g", "1", "-m", "60", "-c", "4", "-t", "2:00"]
 
     # Define the training and evaluation script calls
     training_script = "python multi_training_single_gpu_split.py " 
     # first_training_script = "python multi_training_no_spontaneous.py "  #"python multi_training_single_gpu_split.py " 
     evaluation_script = "python osi_dsi_estimator.py " 
 
-    # initial_benchmark_model = '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Simulation_results/v1_100000_lm_30000_E4_weight_factor_4.0/b_05om/Best_model'
-    # initial_benchmark_model = '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Simulation_results/v1_100000_lm_30000_interarea_weight_distribution_random_weights_E4_weight_factor_4.0_random_weights_True/b_0syq/Best_model'
-    # initial_benchmark_model = '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Simulation_results/v1_90000_lm_30000_E4_weight_factor_4.0/b_1y2a/Best_model'
-    # initial_benchmark_model = '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Simulation_results/v1_45000_lm_15000_E4_weight_factor_4.0/b_qrjq/Best_model'
-    initial_benchmark_model = ''
+    # initial_benchmark_model = '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Simulation_results/v1_100000_lm_30000/b_690d/Intermediate_checkpoints'
+    # initial_benchmark_model = ''
 
     # Append each flag to the string
     for name, value in vars(flags).items():
         # if value != parser.get_default(name) and name in ['learning_rate', 'rate_cost', 'voltage_cost', 'osi_cost', 'temporal_f', 'n_input', 'seq_len']:
         # if value != parser.get_default(name):
-        if name not in ['seed']: 
+        if name not in ['seed', 'n_gpus']: 
             if type(value) == bool and value == False:
                 training_script += f"--no{name} "
                 # first_training_script += f"--no{name} "
@@ -183,15 +186,15 @@ def main():
     job_ids = []
     eval_job_ids = []
 
-    # # Initial OSI/DSI test
-    # initial_evaluation_command = evaluation_commands + ["-o", f"Out/{sim_name}_{v1_neurons}_initial_test.out", "-e", f"Error/{sim_name}_{v1_neurons}_initial_test.err", "-j", f"{sim_name}_initial_test"]
-    # if initial_benchmark_model:
-    #     initial_evaluation_script = evaluation_script + f"--seq_len 200 --seed {flags.seed} --ckpt_dir {logdir}  --run_session {-1} --restore_from {initial_benchmark_model}"
-    # else:
-    #     initial_evaluation_script = evaluation_script + f"--seq_len 200 --seed {flags.seed} --ckpt_dir {logdir}  --run_session {-1}"
-    # initial_evaluation_command = initial_evaluation_command + [initial_evaluation_script]
-    # eval_job_id = submit_job(initial_evaluation_command)
-    # eval_job_ids.append(eval_job_id)
+    # Initial OSI/DSI test
+    initial_evaluation_command = evaluation_commands + ["-o", f"Out/{sim_name}_{v1_neurons}_initial_test.out", "-e", f"Error/{sim_name}_{v1_neurons}_initial_test.err", "-j", f"{sim_name}_initial_test"]
+    if initial_benchmark_model:
+        initial_evaluation_script = evaluation_script + f"--seq_len 200 --seed {flags.seed} --ckpt_dir {logdir}  --run_session {-1} --restore_from {initial_benchmark_model}"
+    else:
+        initial_evaluation_script = evaluation_script + f"--seq_len 200 --seed {flags.seed} --ckpt_dir {logdir}  --run_session {-1}"
+    initial_evaluation_command = initial_evaluation_command + [initial_evaluation_script]
+    eval_job_id = submit_job(initial_evaluation_command)
+    eval_job_ids.append(eval_job_id)
 
     for i in range(flags.n_runs):
         # Submit the training and evaluation jobs with dependencies: train0 - train1 & eval0 - rtrain2 & eval1 - ...
@@ -220,7 +223,7 @@ def main():
            continue
         else:
            new_evaluation_command = evaluation_commands + ['-d', job_id, "-o", f"Out/{sim_name}_{v1_neurons}_test_{i}.out", "-e", f"Error/{sim_name}_{v1_neurons}_test_{i}.err", "-j", f"{sim_name}_test_{i}"]
-           new_evaluation_script = evaluation_script + f"--seq_len 2000 --seed {flags.seed + i} --ckpt_dir {logdir} --restore_from 'Intermediate_checkpoints' --run_session {i}"
+           new_evaluation_script = evaluation_script + f"--seq_len 200 --seed {flags.seed + i} --ckpt_dir {logdir} --restore_from 'Intermediate_checkpoints' --run_session {i}"
            new_evaluation_command = new_evaluation_command + [new_evaluation_script]
            eval_job_id = submit_job(new_evaluation_command)
            eval_job_ids.append(eval_job_id)
@@ -238,18 +241,18 @@ def main():
     # eval_job_id = submit_job(final_evaluation_command)
     # eval_job_ids.append(eval_job_id)
 
-    # # Final evaluation with the best model
-    # final_evaluation_command = evaluation_commands + ['-d', job_id, "-o", f"Out/{sim_name}_{v1_neurons}_test_final.out", "-e", f"Error/{sim_name}_{v1_neurons}_test_final.err", "-j", f"{sim_name}_test_final"]
-    # final_evaluation_script = evaluation_script + f"--seq_len 200 --seed {flags.seed + i} --ckpt_dir {logdir} --restore_from 'Best_model' --run_session {i}"
-    # final_evaluation_command = final_evaluation_command + [final_evaluation_script]
-    # eval_job_id = submit_job(final_evaluation_command)
-    # eval_job_ids.append(eval_job_id)
+    # Final evaluation with the best model
+    final_evaluation_command = evaluation_commands + ['-d', job_id, "-o", f"Out/{sim_name}_{v1_neurons}_test_final.out", "-e", f"Error/{sim_name}_{v1_neurons}_test_final.err", "-j", f"{sim_name}_test_final"]
+    final_evaluation_script = evaluation_script + f"--seq_len 200 --seed {flags.seed + i} --ckpt_dir {logdir} --restore_from 'Best_model' --run_session {i}"
+    final_evaluation_command = final_evaluation_command + [final_evaluation_script]
+    eval_job_id = submit_job(final_evaluation_command)
+    eval_job_ids.append(eval_job_id)
 
-    # final_evaluation_command = evaluation_commands + ['-d', job_id, "-o", f"Out/{sim_name}_{v1_neurons}_test_final_0.out", "-e", f"Error/{sim_name}_{v1_neurons}_test_final_0.err", "-j", f"{sim_name}_test_final0"]
-    # final_evaluation_script = evaluation_script + f"--seq_len 200 --seed {flags.seed + i} --ckpt_dir {logdir} --restore_from 'Best_model' --run_session {i} --noconnected_areas"
-    # final_evaluation_command = final_evaluation_command + [final_evaluation_script]
-    # eval_job_id = submit_job(final_evaluation_command)
-    # eval_job_ids.append(eval_job_id)
+    final_evaluation_command = evaluation_commands + ['-d', job_id, "-o", f"Out/{sim_name}_{v1_neurons}_test_final_0.out", "-e", f"Error/{sim_name}_{v1_neurons}_test_final_0.err", "-j", f"{sim_name}_test_final0"]
+    final_evaluation_script = evaluation_script + f"--seq_len 200 --seed {flags.seed + i} --ckpt_dir {logdir} --restore_from 'Best_model' --run_session {i} --noconnected_areas"
+    final_evaluation_command = final_evaluation_command + [final_evaluation_script]
+    eval_job_id = submit_job(final_evaluation_command)
+    eval_job_ids.append(eval_job_id)
 
     # final_evaluation_command = evaluation_commands + ['-d', job_id, "-o", f"Out/{sim_name}_{v1_neurons}_test_final_1.out", "-e", f"Error/{sim_name}_{v1_neurons}_test_final_1.err", "-j", f"{sim_name}_test_final1"]
     # final_evaluation_script = evaluation_script + f"--seed {flags.seed + i} --ckpt_dir {logdir} --restore_from 'Best_model' --run_session {i} --nocalculate_osi_dsi --noconnected_noise"
