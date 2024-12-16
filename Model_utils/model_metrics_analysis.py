@@ -63,7 +63,7 @@ def calculate_OSI_DSI(firingRates, network, session='drifting_gratings', DG_angl
 
     if session == 'drifting_gratings':
         # Find the preferred DG angle for each neuron
-        if n_trials > 2:
+        if n_trials >= 8:
             TuningAngleEstimation = PreferredTuningAngleAnalysis(firing_rates=firingRates, orientations=DG_angles, 
                                                                 preferred_orientations=network['tuning_angle'], area=area)
             new_tuning_angles, preferred_angle_rates = TuningAngleEstimation.calculate_tuning_angle()
@@ -74,7 +74,7 @@ def calculate_OSI_DSI(firingRates, network, session='drifting_gratings', DG_angl
             osi_dsi_df["max_mean_rate(Hz)"] = np.max(all_direction_rates, axis=0)
 
         # Calculate the DSI and OSI
-        if n_angles > 2:
+        if n_angles >= 8:
             phase_rad = np.deg2rad(DG_angles)
             # Ensure phase_rad is a 2D array with shape (8, 1) for broadcasting
             phase_rad = phase_rad[:, np.newaxis]
@@ -576,7 +576,6 @@ class ModelMetricsAnalysis:
         # osi_target = osi_dsi_df.groupby("cell_type")['OSI'].median()
 
         return osi_target
-
 
 class MetricsBoxplot:
     def __init__(self, area='v1', save_dir='Metrics_analysis', filename=''):

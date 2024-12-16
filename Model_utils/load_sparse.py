@@ -1,10 +1,14 @@
 import os
+# import other_billeh_utils from the same directory as this file
 import h5py
 import numpy as np
 import pandas as pd
 import pickle as pkl
 from Model_utils.network_builder import build_network_dat, build_input_dat, sort_indices, sort_indices_tf
 from Model_utils.interarea_connectivity_builder import InterareaConnectivity
+import sys
+sys.path.append(os.path.dirname(os.path.realpath(__file__)))
+import other_billeh_utils
 from time import time
 
 np.random.seed(0)
@@ -282,9 +286,11 @@ def set_laminar_indices(network, column_name='v1', data_dir='GLIF_network'):
 
 # Here we load the 17400 neurons that act as input in the model
 def load_input(column_name='v1', 
-               source='lgn',
+               source='bkg',
                input_dat_path="GLIF_network/bkg_v1_network_dat.pkl",
                bmtk_id_to_tf_id=None,
+               n_input=17400,
+               n_bkg_connections=4,
                tensorflow_speed_up=False,
             #    start=0,
             #    duration=3000,
@@ -301,7 +307,7 @@ def load_input(column_name='v1',
         with open(input_dat_path, "rb") as f:
             input_dat = pkl.load(f)
 
-    # Unite the edges information of the LGN and the background noise
+    # Process the edges information of the source input
     input_edges = input_dat['edges']
     
     post_indices = []
@@ -327,7 +333,7 @@ def load_input(column_name='v1',
         # This means that source index is within 0-17400
         if bmtk_id_to_tf_id is not None:
             target_tf_id = bmtk_id_to_tf_id[target_bmtk_id]
-            edge_exists = target_tf_id >= 0
+            edge_exists = target_tf_id != -1
             target_tf_id = target_tf_id[edge_exists]
             source_tf_id = source_tf_id[edge_exists]
             weights_tf = weights_tf[edge_exists]
@@ -359,6 +365,22 @@ def load_input(column_name='v1',
     # first column are the post indices and second column the pre indices
     indices = np.stack([post_indices, pre_indices], -1)
 
+    if source == 'bkg':
+        # Generate new random background indices
+        new_bkg_indices = np.random.randint(low=0, high=n_input, size=(indices.shape[0], n_bkg_connections))
+        # Repeat the first column of indices for each background connection
+        repeated_indices = np.repeat(indices[:, 0], n_bkg_connections)
+        # Reshape new_bkg_indices to a 1D array
+        reshaped_new_bkg_indices = new_bkg_indices.reshape(-1)
+        # Stack the repeated indices and reshaped new background indices
+        indices = np.stack([repeated_indices, reshaped_new_bkg_indices], axis=1)
+        # Repeat weights for each connection
+        weights = np.repeat(weights, n_bkg_connections, axis=0)
+        # Repeat delays for each connection
+        delays = np.repeat(delays, n_bkg_connections, axis=0)
+        # Repeat receptor_ids for each connection
+        receptor_ids = np.repeat(receptor_ids, n_bkg_connections, axis=0)
+
     # Sort indices
     # indices, weights, delays, syn_ids = sort_indices_tf(indices, weights, delays, syn_ids)
     if tensorflow_speed_up:
@@ -371,11 +393,11 @@ def load_input(column_name='v1',
     # n_inputs = len(set(pre_indices))
     # print('N_inputs: ', n_inputs)
     # we load the background nodes and their positions
-    nodes_h5_file = h5py.File(f"GLIF_network/network/{source}_nodes.h5", "r")
-    n_inputs = len(nodes_h5_file["nodes"][source]["node_id"])
+    # nodes_h5_file = h5py.File(f"GLIF_network/network/{source}_nodes.h5", "r")
+    # n_inputs = len(nodes_h5_file["nodes"][source]["node_id"])
 
     input_population = dict(
-                            n_inputs=n_inputs,
+                            n_inputs=n_input,
                             indices=indices,
                             weights=weights,
                             delays=delays,
@@ -478,7 +500,8 @@ def load_billeh(flags, n_neurons, flag_str=''):
                                             random_weights=flags.random_weights)
         networks[column_name] = set_laminar_indices(networks[column_name], column_name=column_name, data_dir = flags.data_dir)
 
-        ##### Select random l5e neurons for tracking output #########
+        ##### Select random V1 l5e neurons for tracking output #########
+        # if column_name == 'v1':
         df = pd.read_csv(os.path.join(
             flags.data_dir, "network/v1_node_types.csv"), delimiter=" ")
         
@@ -487,10 +510,16 @@ def load_billeh(flags, n_neurons, flag_str=''):
             if a[1]["pop_name"].startswith("e5"):
                 l5e_types_indices.append(a[0])
         l5e_types_indices = np.array(l5e_types_indices)
+        n_core_neurons = 51978 if column_name == 'v1' else 7414
+        column_core_mask = other_billeh_utils.isolate_core_neurons(networks[column_name], n_selected_neurons=n_core_neurons, 
+                                                                    data_dir='GLIF_network')
         l5e_neuron_sel = np.zeros(networks[column_name]["n_nodes"], np.bool_)
         for l5e_type_index in l5e_types_indices:
             is_l5_type = networks[column_name]["node_type_ids"] == l5e_type_index
             l5e_neuron_sel = np.logical_or(l5e_neuron_sel, is_l5_type)
+        # Choose readout neurons only from the core
+        l5e_neuron_sel = np.logical_and(l5e_neuron_sel, column_core_mask)
+
         networks[column_name]["l5e_types"] = l5e_types_indices
         networks[column_name]["l5e_neuron_sel"] = l5e_neuron_sel
         print(f"> Number of L5e Neurons: {np.sum(l5e_neuron_sel)}")
@@ -503,7 +532,7 @@ def load_billeh(flags, n_neurons, flag_str=''):
             l5e_neuron_indices, size=flags.n_output * flags.neurons_per_output, replace=False
         )
         readout_neurons = readout_neurons.reshape((flags.n_output, flags.neurons_per_output))
-        for i in range(10):
+        for i in range(flags.n_output):
             # networks[column_name][f'localized_readout_neuron_ids_{i}'] = readout_neurons_random[i,:][None,:]
             networks[column_name][f"readout_neuron_ids_{i}"] = readout_neurons[i,:][None,:]
         #########################################
@@ -514,6 +543,7 @@ def load_billeh(flags, n_neurons, flag_str=''):
                                     source='lgn',
                                     input_dat_path=os.path.join(flags.data_dir, f"lgn_{column_name}_network_dat.pkl"),
                                     bmtk_id_to_tf_id=networks[column_name]['bmtk_id_to_tf_id'],
+                                    n_input=flags.n_input,
                                     tensorflow_speed_up=False)
             if flags.n_input != 17400:
                 lgn_inputs[column_name] = reduce_input_population(lgn_input, flags.n_input, seed=flags.seed)
@@ -529,6 +559,7 @@ def load_billeh(flags, n_neurons, flag_str=''):
                                 source='bkg',
                                 input_dat_path=os.path.join(flags.data_dir, f"bkg_{column_name}_network_dat.pkl"),
                                 bmtk_id_to_tf_id=networks[column_name]['bmtk_id_to_tf_id'],
+                                n_input=100,
                                 tensorflow_speed_up=False)
 
         bkg_inputs[column_name] = bkg_input

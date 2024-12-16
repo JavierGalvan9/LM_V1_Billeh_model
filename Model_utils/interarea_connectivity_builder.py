@@ -55,8 +55,8 @@ class InterareaConnectivity:
         self.rd = np.random.RandomState(seed=self.seed)
 
         # Calculate the ratio between the size of the source and target columns
-        target_network_radius = np.sqrt(self.target_network['x']**2 + self.target_network['z']**2).max()
-        source_network_radius = np.sqrt(self.source_network['x']**2 + self.source_network['z']**2).max()
+        # target_network_radius = np.sqrt(self.target_network['x']**2 + self.target_network['z']**2).max()
+        # source_network_radius = np.sqrt(self.source_network['x']**2 + self.source_network['z']**2).max()
         # self.radius_ratio = target_network_radius/source_network_radius
         if self.source_column_name == 'v1':
             self.radius_ratio = 151.07/400
@@ -410,6 +410,7 @@ class InterareaConnectivity:
                     t0 = time()
 
         if target_tf_ids and source_tf_ids:  # if both the lists are not empty
+            # if not all(arr.size == 0 for arr in target_tf_ids) and not all(arr.size == 0 for arr in source_tf_ids):
             # identify target receptor
             # Indentify the which of the 4 types of inputs we have
             # r = np.concatenate(interarea_receptor_ids) - 1
@@ -432,10 +433,10 @@ class InterareaConnectivity:
 
             # rand_delays = rd.randint(low=inter_area_min_delay, high=inter_area_max_delay, size=interarea_weights.shape)
             indices, interarea_weights, interarea_delays, interarea_receptor_ids, interarea_edge_type_ids = sort_indices(indices, interarea_weights, interarea_delays, interarea_receptor_ids, interarea_edge_type_ids)
-
-        else:
-            indices, interarea_weights, dense_shape, interarea_delays, interarea_receptor_ids, interarea_edge_type_ids = None, None, None, np.ones(1), None, None
-            # max_delay in model.py needs a non- None type
+            print(f'Number of connections from {self.source_column_name} to {self.target_column_name}: {len(interarea_weights)}')
+        # else:
+        #     indices, interarea_weights, dense_shape, interarea_delays, interarea_receptor_ids, interarea_edge_type_ids = None, None, None, np.ones(1), None, None
+        #     # max_delay in model.py needs a non- None type
 
         # Create a dictionary to save the interarea connections
         if 'interarea_synapses' not in self.target_network.keys():
@@ -449,7 +450,5 @@ class InterareaConnectivity:
         self.target_network['interarea_synapses'][self.source_column_name]['receptor_ids'] = interarea_receptor_ids.astype(np.uint8)
         self.target_network['interarea_synapses'][self.source_column_name]['dense_shape'] = dense_shape
         self.target_network['interarea_synapses'][self.source_column_name]['edge_type_ids'] = interarea_edge_type_ids.astype(np.uint16)
-
-        print(f'Number of connections from {self.source_column_name} to {self.target_column_name}: {len(interarea_weights)}')
 
         return self.target_network

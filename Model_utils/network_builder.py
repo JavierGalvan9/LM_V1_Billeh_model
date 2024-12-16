@@ -4,6 +4,7 @@ import json
 import numpy as np
 import pandas as pd
 import pickle as pkl
+import tensorflow as tf
 
 
 def convert_glif_lif_asc_psc(dynamics_params, tau_syns):
@@ -33,6 +34,9 @@ def convert_glif_lif_asc_psc(dynamics_params, tau_syns):
 
 
 def sort_indices(indices, *arrays):
+    # if indices.size == 0:
+    #     return (indices, *arrays)
+    # else:
     max_ind = np.max(indices) + 1
     if np.iinfo(indices.dtype).max < max_ind * (max_ind + 1) :
         indices = indices.astype(np.int64)
@@ -44,6 +48,9 @@ def sort_indices(indices, *arrays):
 # The following function, although it provided a speed up, it creates bunch of tensor copies 
 # which are not garbage collected and thus it is not memory efficient
 def sort_indices_tf(indices, *arrays):
+    # if indices.size == 0:
+    #     return (indices, *arrays)
+    # else:
     indices = tf.cast(indices, dtype=tf.int64)    
     max_ind = tf.reduce_max(indices) + 1
     q = indices[:, 0] * max_ind + indices[:, 1]
