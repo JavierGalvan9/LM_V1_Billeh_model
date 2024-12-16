@@ -248,18 +248,18 @@ def compute_spike_rate_distribution_loss(_rates, target_rate, dtype=tf.float32):
     # loss = huber_quantile_loss(u, tau, 0.1, dtype=dtype) # this kappa value is usually too large and makes the training unstable
     return loss
 
+
 ### To calculate the loss of firing rates between neuron types
-def compute_spike_rate_target_loss(_spikes, target_rates, dtype=tf.float32):
+def compute_spike_rate_target_loss(rates, target_rates, dtype=tf.float32):
     # TODO: define this function
     # target_rates is a dictionary that contains all the cell types.
     # I should iterate on them, and add the cost for each one at the end.
     # spikes will have a shape of (batch_size, n_steps, n_neurons)
-    rates = tf.reduce_mean(_spikes, (0, 1))
     total_loss = tf.constant(0.0, dtype=dtype)
     num_neurons = tf.constant(0, dtype=tf.int32)
     for key, value in target_rates.items():
         neuron_ids = value["neuron_ids"]
-        if tf.size(neuron_ids) != 0:
+        if len(neuron_ids) != 0:
             _rate_type = tf.gather(rates, neuron_ids)
             target_rate = value["sorted_target_rates"]
             loss_type = compute_spike_rate_distribution_loss(_rate_type, target_rate, dtype=dtype)
@@ -269,7 +269,7 @@ def compute_spike_rate_target_loss(_spikes, target_rates, dtype=tf.float32):
     total_loss /= tf.cast(num_neurons, dtype=dtype)  
 
     return total_loss
-
+    
 
 class SpikeRateDistributionTarget:
     """ Instead of regularization, treat it as a target.
@@ -356,7 +356,8 @@ class SpikeRateDistributionTarget:
             #     neuron_ids = np.where(np.isin(self._network["node_type_ids"], value["ids"]))[0]
             
             type_n_neurons = len(neuron_ids)
-            target_firing_rates[key]['neuron_ids'] = tf.convert_to_tensor(neuron_ids, dtype=tf.int32)
+            # target_firing_rates[key]['neuron_ids'] = tf.convert_to_tensor(neuron_ids, dtype=tf.int32)
+            target_firing_rates[key]['neuron_ids'] = neuron_ids #tf.convert_to_tensor(neuron_ids, dtype=tf.int32)
             sorted_target_rates = self._rates_dampening * sample_firing_rates(value["rates"], type_n_neurons, self._seed)
             target_firing_rates[key]['sorted_target_rates'] = tf.convert_to_tensor(sorted_target_rates, dtype=self._dtype)
             # target_firing_rates[key]['tuning_angles'] = tf.cast(tf.gather(self._network['tuning_angle'], neuron_ids), dtype=self._dtype)
@@ -366,9 +367,52 @@ class SpikeRateDistributionTarget:
     def __call__(self, spikes, trim=True):
         spikes = spike_trimming(spikes, pre_delay=self._pre_delay, post_delay=self._post_delay, trim=trim)
 
-        reg_loss = compute_spike_rate_target_loss(spikes, self._target_rates, dtype=self._dtype) 
-        
+        rates = tf.reduce_mean(spikes, (0, 1)) # calculate the mean firing rate over time and batch
+        reg_loss = compute_spike_rate_target_loss(rates, self._target_rates, dtype=self._dtype) 
+
         return reg_loss * self._rate_cost
+
+        # rates = tf.reduce_mean(spikes, axis=1) # rates.shape = (batch_size, num_neurons)
+        # reg_loss_per_batch = tf.map_fn(lambda rate: compute_spike_rate_target_loss(rate, self._target_rates), rates, dtype=self._dtype)
+        # reg_loss_per_batch = tf.cast(reg_loss_per_batch, dtype=self._dtype)
+        # # reg_loss = compute_spike_rate_distribution_loss(rates, self._target_rates) * self._rate_cost
+        # # reg_loss = tf.cast(tf.reduce_mean(reg_loss), dtype=self._dtype)
+
+        # return reg_loss_per_batch * self._rate_cost
+
+
+class GarretRateDistributionTarget:
+    def __init__(self, network, rate_cost=.5, pre_delay=None, post_delay=None, data_dir='GLIF_network', 
+                rates_dampening=1.0, seed=42, dtype=tf.float32):
+        self._network = network
+        self._rate_cost = rate_cost
+        self._pre_delay = pre_delay
+        self._post_delay = post_delay
+        self._rates_dampening = rates_dampening
+        self._data_dir = data_dir
+        self._dtype = dtype
+        self._seed = seed
+        self._target_rates = self.get_garret_firing_rates()
+    
+    def get_garret_firing_rates(self):
+        path = '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/garrett_firing_rates.pkl'
+        with open(path, 'rb') as f:
+            garrett_firing_rates = pkl.load(f)
+
+        sorted_target_rates = self._rates_dampening * sample_firing_rates(garrett_firing_rates, self._network['n_nodes'], self._seed)
+
+        return sorted_target_rates
+
+    def __call__(self, spikes, trim=True):
+        spikes = spike_trimming(spikes, pre_delay=self._pre_delay, post_delay=self._post_delay, trim=trim)
+
+        rates = tf.reduce_mean(spikes, axis=1) # rates.shape = (batch_size, num_neurons)
+        reg_loss_per_batch = tf.map_fn(compute_spike_rate_distribution_loss_per_batch, rates, dtype=self._dtype)
+        reg_loss_per_batch = tf.cast(reg_loss_per_batch, dtype=self._dtype)
+        # reg_loss = compute_spike_rate_distribution_loss(rates, self._target_rates) * self._rate_cost
+        # reg_loss = tf.cast(tf.reduce_mean(reg_loss), dtype=self._dtype)
+
+        return reg_loss_per_batch * self._rate_cost
 
 
 class SynchronizationLoss(Layer):
@@ -622,8 +666,8 @@ class VoltageRegularization:
         voltages = (voltages - self._voltage_offset) / self._voltage_scale
         v_pos = tf.square(tf.nn.relu(voltages - 1.0))
         v_neg = tf.square(tf.nn.relu(-voltages + 1.0))
-        # voltage_loss = tf.reduce_mean(tf.reduce_sum(v_pos + v_neg, -1)) * self._voltage_cost
-        voltage_loss = tf.reduce_mean(v_pos + v_neg) 
+        voltage_loss = tf.reduce_mean(tf.reduce_mean(v_pos + v_neg, -1)) * self._voltage_cost
+        # voltage_loss = tf.reduce_mean(v_pos + v_neg, axis=[1, 2]) * self._voltage_cost 
 
         # return voltage_loss * self._voltage_cost
         return voltage_loss * self._voltage_cost
@@ -835,17 +879,16 @@ class OrientationSelectivityLoss:
         return angle_loss * self._osi_cost
 
     def crowd_osi_loss(self, spikes, angle, normalizer=None):  
-        # Calculate the angle deltas between current angle and tuning angle
-        angle = tf.cast(angle[0][0], self._dtype) 
-        delta_angle = tf.expand_dims(angle, axis=0) - self._tuning_angles
-        # i want the delta_angle to be within 0-360
-        # delta_angle = tf.math.floormod(delta_angle, 360)
+        # Ensure angle is [batch_size] and cast to correct dtype
+        angle = tf.cast(tf.reshape(angle, [-1]), self._dtype)  # [batch_size]
+        # Compute delta_angle with broadcasting
+        delta_angle = angle[:, tf.newaxis] - self._tuning_angles[tf.newaxis, :]  # [batch_size, n_neurons_core]
         radians_delta_angle = delta_angle * (self._tf_pi / 180)
             
-        # sum spikes in _z, and multiply with delta_angle.
-        rates = tf.reduce_mean(spikes, axis=[0, 1])
+        # Compute rates over time dimension
+        rates = tf.reduce_mean(spikes, axis=1)  # [batch_size, n_neurons]
         if self._core_mask is not None:
-            rates = tf.boolean_mask(rates, self._core_mask, axis=0)
+            rates = tf.boolean_mask(rates, self._core_mask, axis=1)
 
         if normalizer is not None:
             if self._core_mask is not None:
@@ -858,19 +901,52 @@ class OrientationSelectivityLoss:
         weighted_osi_cos_responses = rates * tf.math.cos(2.0 * radians_delta_angle)
         weighted_dsi_cos_responses = rates * tf.math.cos(radians_delta_angle)
 
-        approximated_denominator = tf.math.unsorted_segment_mean(rates, self.node_type_ids, self._n_node_types)
+        batch_size = tf.shape(rates)[0]
+        # Adjust segment_ids for batch dimension
+        batch_offsets = tf.range(batch_size, dtype=self.node_type_ids.dtype) * self._n_node_types  # [batch_size]
+        batch_offsets_expanded = batch_offsets[:, tf.newaxis]  # [batch_size, 1]
+
+        segment_ids = self.node_type_ids[tf.newaxis, :]  # [1, n_neurons_core]
+        segment_ids = tf.tile(segment_ids, [batch_size, 1])  # [batch_size, n_neurons_core]
+        segment_ids = segment_ids + batch_offsets_expanded  # [batch_size, n_neurons_core]
+
+        # Flatten data and segment_ids
+        data_flat_rates = tf.reshape(rates, [-1])  # [batch_size * n_neurons_core]
+        data_flat_weighted_osi = tf.reshape(weighted_osi_cos_responses, [-1])
+        data_flat_weighted_dsi = tf.reshape(weighted_dsi_cos_responses, [-1])
+        segment_ids_flat = tf.reshape(segment_ids, [-1])
+
+        num_segments = batch_size * self._n_node_types
+
+        # Compute denominators and numerators
+        approximated_denominator = tf.math.unsorted_segment_mean(data_flat_rates, segment_ids_flat, num_segments=num_segments)
+        approximated_denominator = tf.reshape(approximated_denominator, [batch_size, self._n_node_types])
         approximated_denominator = tf.maximum(approximated_denominator, self._min_rates_threshold)
-        osi_approx_type = tf.math.unsorted_segment_mean(weighted_osi_cos_responses, self.node_type_ids, self._n_node_types) / approximated_denominator
-        dsi_approx_type = tf.math.unsorted_segment_mean(weighted_dsi_cos_responses, self.node_type_ids, self._n_node_types) / approximated_denominator
 
-        # Calculate the OSI loss
-        osi_loss_type = tf.math.square(osi_approx_type - self.osi_target_values)
-        dsi_loss_type = tf.math.square(dsi_approx_type - self.dsi_target_values)
+        osi_numerator = tf.math.unsorted_segment_mean(data_flat_weighted_osi, segment_ids_flat, num_segments=num_segments)
+        osi_numerator = tf.reshape(osi_numerator, [batch_size, self._n_node_types])
 
-        total_osi_loss = tf.reduce_sum(osi_loss_type * self.cell_type_count) / tf.reduce_sum(self.cell_type_count)
-        total_dsi_loss = tf.reduce_sum(dsi_loss_type * self.cell_type_count) / tf.reduce_sum(self.cell_type_count)
+        dsi_numerator = tf.math.unsorted_segment_mean(data_flat_weighted_dsi, segment_ids_flat, num_segments=num_segments)
+        dsi_numerator = tf.reshape(dsi_numerator, [batch_size, self._n_node_types])
 
-        return (total_osi_loss + total_dsi_loss) * self._osi_cost
+        # Compute approximations
+        osi_approx_type = osi_numerator / approximated_denominator  # [batch_size, n_node_types]
+        dsi_approx_type = dsi_numerator / approximated_denominator
+
+        # Compute losses
+        # osi_target_values = self.osi_target_values[tf.newaxis, :]  # [1, n_node_types]
+        # dsi_target_values = self.dsi_target_values[tf.newaxis, :]  # [1, n_node_types]
+        osi_loss_type = tf.math.square(osi_approx_type - self.osi_target_values[tf.newaxis, :])  # [batch_size, n_node_types]
+        dsi_loss_type = tf.math.square(dsi_approx_type - self.dsi_target_values[tf.newaxis, :])
+
+        # cell_type_count = self.cell_type_count[tf.newaxis, :]  # [1, n_node_types]
+        numerator = tf.reduce_sum((osi_loss_type + dsi_loss_type) * self.cell_type_count[tf.newaxis, :], axis=1)  # [batch_size]
+        denominator = tf.reduce_sum(self.cell_type_count)  # Scalar
+
+        total_loss_per_batch = numerator / denominator  # [batch_size]
+        total_loss = tf.reduce_mean(total_loss_per_batch) * self._osi_cost
+
+        return total_loss
 
     def __call__(self, spikes, angle, trim, normalizer=None):
 
