@@ -9,10 +9,22 @@
 
 # run -g 1 -m 65 -t 2:00 -o Out/gordo.out -e Error/gordo.err -j gordo "python osi_dsi_estimator.py --core_loss --interarea_weight_distribution 'billeh_weights' --E4_weight_factor 4.0 --v1_neurons 90000 --lm_neurons 30000 --ckpt_dir '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Simulation_results/v1_90000_lm_30000_E4_weight_factor_4.0/b_m4bo' --restore_from 'Best_model' --run_session 1000 --train_noise --train_interarea_lm_v1 --train_interarea_v1_lm --train_recurrent_v1 --train_recurrent_lm"
 
-# python classification_training_testing.py --batch_size 2 --core_loss --v1_neurons 100000 --lm_neurons 30000 --rate_cost 10000 --osi_cost 20 --sync_cost 0.1 --recurrent_weight_regularization 1 --train_input --train_interarea_lm_v1 --train_interarea_v1_lm --train_recurrent_v1 --train_recurrent_lm --n_runs 6 --n_epochs 781 --steps_per_epoch 64
-python classification_training_testing.py --batch_size 10 --dtype 'float16' --core_loss --v1_neurons 100000 --lm_neurons 30000 --rate_cost 1000 --recurrent_weight_regularization 100000 --train_input --train_noise --train_interarea_lm_v1 --train_interarea_v1_lm --train_recurrent_v1 --train_recurrent_lm --n_runs 6 --n_epochs 24 --steps_per_epoch 512
+num_replicas=1
+training_samples=60000
+test_samples=10000
+batch_size=13
+global_batch_size=$((batch_size*num_replicas))
+# calculate steps_per_epoch as integer division
+steps_per_epoch=$((training_samples/global_batch_size))
+val_steps=$((test_samples/global_batch_size))
+
+# run -g 1 -c 4 -m 80 -t 1:00 -o Out/test.out -e Error/test.err -j test "python classification_training.py --test_only --ckpt_dir '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Simulation_results/v1_100000_lm_30000/b_jshp_mnist' --restore_from 'Best_model' --delays '50,50' --seq_len 200 --batch_size 2 --dtype 'float16' --core_loss --v1_neurons 100000 --lm_neurons 30000 --rate_cost 100 --voltage_cost 1 --recurrent_weight_regularization 0 --train_input --train_noise --train_interarea_lm_v1 --train_interarea_v1_lm --train_recurrent_v1 --train_recurrent_lm --n_runs 2 --n_epochs 10 --steps_per_epoch 248 --val_steps $val_steps"
+
+python classification_training_testing.py --test_only --restore_from '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Simulation_results/v1_100000_lm_30000/b_oo67_mnist/Intermediate_checkpoints' --batch_size $batch_size --dtype 'float16' --n_gpus $num_replicas --core_loss --v1_neurons 100000 --lm_neurons 30000 --val_steps $val_steps
+# python classification_training_testing.py --batch_size $batch_size --dtype 'float16' --n_gpus $num_replicas --core_loss --v1_neurons 100000 --lm_neurons 30000 --rate_cost 100 --voltage_cost 1 --recurrent_weight_regularization 0 --train_noise --train_recurrent_lm --train_interarea_lm_v1 --train_interarea_v1_lm --n_runs 1 --n_epochs 12 --steps_per_epoch $steps_per_epoch --val_steps $val_steps
+
+
+# python classification_training_testing.py --delays '50,50' --seq_len 200 --batch_size $batch_size --dtype 'float16' --n_gpus $num_replicas --core_loss --v1_neurons 100000 --lm_neurons 30000 --rate_cost 100 --voltage_cost 1 --recurrent_weight_regularization 0 --train_noise --train_interarea_lm_v1 --train_interarea_v1_lm --train_recurrent_v1 --train_recurrent_lm --n_runs 6 --n_epochs 6 --steps_per_epoch $steps_per_epoch --val_steps $val_steps
 
 # python parallel_training_testing.py --core_loss --interarea_weight_distribution 'random_weights' --random_weights --E4_weight_factor 4.0 --v1_neurons 100000 --lm_neurons 30000 --rate_cost 10000 --osi_cost 20 --sync_cost 0.1 --recurrent_weight_regularization 1 --train_noise --train_interarea_lm_v1 --train_interarea_v1_lm --train_recurrent_v1 --train_recurrent_lm --n_runs 10 --n_epochs 50 --steps_per_epoch 25
 # python parallel_training_testing.py --core_loss --interarea_weight_distribution 'billeh_weights' --E4_weight_factor 4.0 --v1_neurons 90000 --lm_neurons 30000 --rate_cost 10000 --osi_cost 10 --sync_cost 0.25 --recurrent_weight_regularization 0.05 --train_noise --train_interarea_lm_v1 --train_interarea_v1_lm --train_recurrent_v1 --train_recurrent_lm --n_runs 20 --n_epochs 1 --steps_per_epoch 256
-
-# scp -r Benchmark_models sofiagil@nuredduna2020:/home/sofiagil/tfm/LM_V1_Billeh_model_sofia

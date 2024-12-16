@@ -30,24 +30,27 @@ def printgpu(gpu_id=0):
         peak = meminfo['peak'] / 1024**3
         print(f'    TensorFlow GPU {gpu_id} Memory Usage: {current:.2f} GiB, Peak Usage: {peak:.2f} GiB')
         # Check GPU memory using nvidia-smi
-        result = subprocess.run(['nvidia-smi', '--query-gpu=memory.used,memory.free,memory.total', '--format=csv,nounits,noheader'],
-                            stdout=subprocess.PIPE, encoding='utf-8') # MiB
-        used, free, total = [float(x)/1024 for x in result.stdout.strip().split(',')]
-        print(f"    Total GPU Memory Usage: Used: {used:.2f} GiB, Free: {free:.2f} GiB, Total: {total:.2f} GiB")
-
-
-def compose_str(metrics_values):
-        if len(metrics_values) == 8:
-            _acc, _loss, _rate, _rate_loss, _voltage_loss, _regularizer_loss, _osi_dsi_loss, _sync_loss = metrics_values
-            _s = f'Loss {_loss:.4f}, '
-            _s += f'RLoss {_rate_loss:.4f}, '
-            _s += f'VLoss {_voltage_loss:.4f}, '
-            _s += f'RegLoss {_regularizer_loss:.4f}, '
-            _s += f'OLoss {_osi_dsi_loss:.4f}, '
-            _s += f'SLoss {_sync_loss:.4f}, '
-            _s += f'Accuracy {_acc:.4f}, '
-            _s += f'Rate {_rate:.4f}'
+        result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=memory.used,memory.free,memory.total', '--format=csv,nounits,noheader'],
+            stdout=subprocess.PIPE, encoding='utf-8'
+        )  # MiB
+        # Split output into lines for each GPU
+        gpu_memory_info = result.stdout.strip().split('\n')
+        if gpu_id is not None:
+            # Display memory info for a specific GPU
+            if gpu_id < len(gpu_memory_info):
+                used, free, total = [float(x)/1024 for x in gpu_memory_info[gpu_id].split(',')]
+                print(f"    Total GPU {gpu_id} Memory Usage: Used: {used:.2f} GiB, Free: {free:.2f} GiB, Total: {total:.2f} GiB")
+            else:
+                print(f"    Invalid GPU ID: {gpu_id}. Available GPUs: {len(gpu_memory_info)}")
         else:
+            # Display memory info for all GPUs
+            for i, info in enumerate(gpu_memory_info):
+                used, free, total = [float(x)/1024 for x in info.split(',')]
+                print(f"    Total GPU {gpu_id} Memory Usage: Used: {used:.2f} GiB, Free: {free:.2f} GiB, Total: {total:.2f} GiB")
+                
+def compose_str(metrics_values, mode='classification'):
+        if mode == 'classification':
             _acc, _loss, _rate, _rate_loss, _voltage_loss, _regularizer_loss, _classification_loss = metrics_values
             _s = f'Loss {_loss:.4f}, '
             _s += f'RLoss {_rate_loss:.4f}, '
@@ -56,6 +59,16 @@ def compose_str(metrics_values):
             _s += f'CLoss {_classification_loss:.4f}, '
             _s += f'Accuracy {_acc:.4f}, '
             _s += f'Rate {_rate:.4f}'
+        else:
+            _loss, _rate, _rate_loss, _voltage_loss, _regularizer_loss, _osi_dsi_loss, _sync_loss = metrics_values
+            _s = f'Loss {_loss:.4f}, '
+            _s += f'RLoss {_rate_loss:.4f}, '
+            _s += f'VLoss {_voltage_loss:.4f}, '
+            _s += f'RegLoss {_regularizer_loss:.4f}, '
+            _s += f'OLoss {_osi_dsi_loss:.4f}, '
+            _s += f'SLoss {_sync_loss:.4f}, '
+            _s += f'Rate {_rate:.4f}'
+            
         return _s
 
 def compute_ks_statistics(df, metric='Weight', min_n_sample=15):
@@ -114,8 +127,9 @@ def pop_fano(spikes, bin_sizes):
         max_index = spikes.shape[0] // bin_size * bin_size
         # drop the last bin if it is not complete
         # sum over neurons to get the spike counts
-        trimmed_spikes = np.sum(spikes[:max_index, :], axis=1) 
-        trimmed_spikes = np.reshape(trimmed_spikes, (max_index // bin_size, bin_size, -1))
+        # trimmed_spikes = np.sum(spikes[:max_index, :], axis=1) 
+        trimmed_spikes = spikes[:max_index]
+        trimmed_spikes = np.reshape(trimmed_spikes, (max_index // bin_size, bin_size))
         # sum over the bins
         sp_counts = np.sum(trimmed_spikes, axis=1)
         # Calculate the mean of the spike counts
@@ -125,6 +139,29 @@ def pop_fano(spikes, bin_sizes):
             fanos[i] = np.var(sp_counts) / mean_count
                  
     return fanos
+
+# def pop_fano_tf(spikes, bin_sizes, epsilon=1e-7):
+#     # transpose the spikes tensor to have the shape (seq_len, samples)
+#     all_spikes_transposed = tf.transpose(spikes)
+#     # Initialize the Fano factors tensor
+#     fanos = tf.TensorArray(dtype=tf.float32, size=len(bin_sizes))
+#     for i, bin_width in enumerate(bin_sizes):
+#         # drop the last entry to avoid last bin smaller size effect
+#         bin_size = int(np.round(bin_width * 1000))
+#         max_index = all_spikes_transposed.shape[0] // bin_size * bin_size
+#         trimmed_spikes = all_spikes_transposed[:max_index, :]
+#         # Reshape the spikes tensor 
+#         trimmed_spikes = tf.reshape(trimmed_spikes, [max_index // bin_size, bin_size, -1])
+#         # Calculate the number of spikes in each bin
+#         sp_counts = tf.reduce_sum(trimmed_spikes, axis=1)
+#         # Calculate the mean and variance of spike counts
+#         mean_count = tf.reduce_mean(sp_counts, axis=0)
+#         mean_count = tf.maximum(mean_count, epsilon)
+#         var_count = tf.math.reduce_variance(sp_counts, axis=0)
+#         fano = var_count / mean_count
+#         fanos = fanos.write(i, fano)
+
+#     return fanos.stack()
 
 # create a class for callbacks in other training sessions (e.g. validation, testing)
 class OsiDsiCallbacks:
@@ -181,12 +218,13 @@ class OsiDsiCallbacks:
     def node_to_pop_weights_analysis(self, indices, variable='', area='', voltage_scale=None):
         pop_names = other_billeh_utils.pop_names(self.networks[area])
         target_cell_types = [other_billeh_utils.pop_name_to_cell_type(pop_name) for pop_name in pop_names]
-        if 'rest_of_brain_weights' in variable:
-            post_indices =  np.repeat(indices[:, 0], 4)
-            voltage_scale = np.repeat(voltage_scale, 4)
-        else:
-            post_indices = indices[:, 0]
-
+        # print(variable, indices[:, 0].shape, voltage_scale.shape)
+        # if 'rest_of_brain_weights' in variable:
+        #     post_indices =  np.repeat(indices[:, 0], 4)
+        #     voltage_scale = np.repeat(voltage_scale, 4)
+        # else:
+        #     post_indices = indices[:, 0]
+        post_indices = indices[:, 0]
         post_cell_types = [target_cell_types[i] for i in post_indices]
 
         if voltage_scale is not None:
@@ -451,32 +489,35 @@ class OsiDsiCallbacks:
         
     def fano_factor(self, spikes, area='', t_start=0.7, t_end=2.5, n_samples=100, analyze_core_only=True):
         
+        # Trim spikes to the desired time window
+        t_start_idx = int(t_start * 1000)
+        t_end_idx = int(t_end * 1000)
+        spikes = spikes[:, :, t_start_idx:t_end_idx, :]
+
         if analyze_core_only:
             # Isolate the core neurons
             n_core_neurons = 51978 if area == 'v1' else 7414 
-            pop_names = other_billeh_utils.pop_names(self.networks[area], n_selected_neurons=n_core_neurons)
             core_mask = other_billeh_utils.isolate_core_neurons(self.networks[area], n_selected_neurons=n_core_neurons, data_dir=self.flags.data_dir)
-            spikes = spikes[:, :, :, core_mask]
         else:
             n_core_neurons = spikes.shape[-1]
-            pop_names = other_billeh_utils.pop_names(self.networks[area])
+            core_mask = np.ones(n_core_neurons, dtype=bool)
             
         # Calculate the Fano Factor for the spikes
+        pop_names = other_billeh_utils.pop_names(self.networks[area])
         node_ei = np.array([pop_name[0] for pop_name in pop_names])
-        node_id = np.arange(n_core_neurons)
         # Get the IDs for excitatory neurons
-        node_id_e = node_id[node_ei == 'e']
-        # Reshape spikes data 
-        new_spikes = spikes[:, :, int(1000*t_start):int(1000*t_end), :]
-        new_spikes = new_spikes.reshape(-1, new_spikes.shape[2], new_spikes.shape[3])
-        n_trials, seq_len, n_neurons = new_spikes.shape
- 
-        # Generate Fano factors across random samples
-        fanos = []
+        total_mask = np.logical_and(node_ei == 'e', core_mask)
+        n_e_neurons = np.sum(total_mask)
+        spikes = spikes[:, :, :, total_mask]
+        node_id_e = np.arange(0, n_e_neurons)
+        # Reshape the spikes tensor to have the shape (n_trials, seq_len, n_neurons)
+        spikes = np.reshape(spikes, [spikes.shape[0]*spikes.shape[1], spikes.shape[2], spikes.shape[3]])
+        n_trials = spikes.shape[0]
         # Pre-define bin sizes
         bin_sizes = np.logspace(-3, 0, 20)
         # using the simulation length, limit bin_sizes to define at least 2 bins
-        bin_sizes_mask = bin_sizes < (t_end - t_start)/2
+        # bin_sizes_mask = bin_sizes < (t_end - t_start)/2
+        bin_sizes_mask = bin_sizes < (t_end - t_start)/5
         bin_sizes = bin_sizes[bin_sizes_mask]
         # Vectorize the sampling process
         if area == 'v1':
@@ -486,20 +527,22 @@ class OsiDsiCallbacks:
             sample_size = 33
             sample_std = 14
         sample_counts = np.random.normal(sample_size, sample_std, n_samples).astype(int)
-        # ensure that the sample counts are at least 15
-        sample_counts = np.maximum(sample_counts, 15)
-        # ensure that the sample counts are less than the number of neurons
-        sample_counts = np.minimum(sample_counts, len(node_id_e))
+        # ensure that the sample counts are at least 15 and less than the number of neurons
+        sample_counts = np.clip(sample_counts, 15, n_e_neurons)
         # trial_ids =np.random.choice(np.arange(n_trials), n_samples, replace=False)
         trial_ids = np.random.randint(n_trials, size=n_samples)
 
+        # Generate Fano factors across random samples
+        fanos = []
         for i in range(n_samples):
             random_trial_id = trial_ids[i]
             sample_num = sample_counts[i]
             sample_ids = np.random.choice(node_id_e, sample_num, replace=False)
             # selected_spikes = np.concatenate([spikes_timestamps[random_trial_id][np.isin(node_id, sample_ids), :]])
             # selected_spikes = selected_spikes[~np.isnan(selected_spikes)]
-            selected_spikes = new_spikes[random_trial_id][:, np.isin(node_id, sample_ids)]
+            # selected_spikes = spikes[random_trial_id][:, np.isin(node_id, sample_ids)]
+            selected_spikes = spikes[random_trial_id][:, sample_ids]
+            selected_spikes = np.sum(selected_spikes, axis=1)
             # if there are spikes use pop_fano
             if np.sum(selected_spikes) > 0:
                 fano = pop_fano(selected_spikes, bin_sizes)
@@ -517,56 +560,49 @@ class OsiDsiCallbacks:
         evoked_fanos_mean = np.nanmean(evoked_fanos, axis=0)
         evoked_fanos_std = np.nanstd(evoked_fanos, axis=0)
         evoked_fanos_sem = evoked_fanos_std / np.sqrt(n_samples)
-
         spontaneous_fanos_mean = np.nanmean(spontaneous_fanos, axis=0)
         spontaneous_fanos_std = np.nanstd(spontaneous_fanos, axis=0)
         spontaneous_fanos_sem = spontaneous_fanos_std / np.sqrt(n_samples)
-
-        # find the frequency of the maximum
+        # Find max fanos and corresponding frequency
         evoked_max_fano = np.nanmax(evoked_fanos_mean)
         evoked_max_fano_freq = 1/(2*evoked_bin_sizes[np.nanargmax(evoked_fanos_mean)])
         spontaneous_max_fano = np.nanmax(spontaneous_fanos_mean)
         spontaneous_max_fano_freq = 1/(2*spont_bin_sizes[np.nanargmax(spontaneous_fanos_mean)])
-
-        # Calculate the evoked experimental error committed
-        # evoked_exp_data_path = '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Synchronization_data/all_fano_300ms_evoked.npy'
+         # Load experimental data
         evoked_exp_data_path = os.path.join(data_dir, f'Fano_factor_{area}', f'{area}_fano_running_1800ms_evoked.npy')
-        # load the experimental data
         evoked_exp_fanos = np.load(evoked_exp_data_path, allow_pickle=True)
-        n_experimental_samples = evoked_exp_fanos.shape[0]
-        # Calculate mean, standard deviation, and SEM of the Fano factors
-        evoked_exp_fanos_mean = np.nanmean(evoked_exp_fanos, axis=0)
-        # filter bin_sizes where the experimental data is not nan or zero
-        # evoked_exp_fanos_mean = evoked_exp_fanos_mean[bin_sizes_mask]
-        evoked_exp_fanos_std = np.nanstd(evoked_exp_fanos, axis=0)
-        evoked_exp_fanos_sem = evoked_exp_fanos_std / np.sqrt(n_experimental_samples)
-
-        # Calculate the spontaneous experimental error committed
-        # spont_exp_data_path = '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Synchronization_data/all_fano_300ms_spont.npy'
         spont_exp_data_path = os.path.join(data_dir, f'Fano_factor_{area}', f'{area}_fano_running_300ms_spont.npy')
-        # load the experimental data
         spont_exp_fanos = np.load(spont_exp_data_path, allow_pickle=True)
-        n_experimental_samples = spont_exp_fanos.shape[0]
-        # Calculate mean, standard deviation, and SEM of the Fano factors
-        spont_exp_fanos_mean = np.nanmean(spont_exp_fanos, axis=0)
-        # filter bin_sizes where the experimental data is not nan or zero
-        # spont_exp_fanos_mean = spont_exp_fanos_mean[bin_sizes_mask]
-        spont_exp_fanos_std = np.nanstd(spont_exp_fanos, axis=0)
-        spont_exp_fanos_sem = spont_exp_fanos_std / np.sqrt(n_experimental_samples)
+        # Mask experimental data to match bin sizes
+        # Assuming experimental data was computed with the same initial bin_sizes array
+        # We'll just take the first len(evoked_bin_sizes) and len(spont_bin_sizes)
+        evoked_exp_fanos_mean = np.nanmean(evoked_exp_fanos, axis=0)[:len(evoked_bin_sizes)]
+        evoked_exp_fanos_std = np.nanstd(evoked_exp_fanos, axis=0)[:len(evoked_bin_sizes)]
+        evoked_exp_fanos_sem = evoked_exp_fanos_std / np.sqrt(evoked_exp_fanos.shape[0])
+        spont_exp_fanos_mean = np.nanmean(spont_exp_fanos, axis=0)[:len(spont_bin_sizes)]
+        spont_exp_fanos_std = np.nanstd(spont_exp_fanos, axis=0)[:len(spont_bin_sizes)]
+        spont_exp_fanos_sem = spont_exp_fanos_std / np.sqrt(spont_exp_fanos.shape[0])
         
-        # Plot the Fano Factor
+        # Plot the results
         fig, axs = plt.subplots(1, 2, figsize=(12, 6), sharex=True, sharey=True)
-        # plot fanos with error bars
+        # Plot all experimental evoked traces with low alpha
+        for row in range(evoked_exp_fanos.shape[0]):
+            axs[0].plot(evoked_bin_sizes, evoked_exp_fanos[row, :len(evoked_bin_sizes)], color='gray', alpha=0.3)
+
         axs[0].errorbar(evoked_bin_sizes, evoked_fanos_mean, yerr=evoked_fanos_sem, fmt='o-', label='Evoked Model', color='blue')
-        axs[0].errorbar(evoked_bin_sizes, evoked_exp_fanos_mean[:len(evoked_bin_sizes)], yerr=evoked_exp_fanos_sem[:len(evoked_bin_sizes)], fmt='o-', label='Evoked Experimental', color='k')
+        axs[0].errorbar(evoked_bin_sizes, evoked_exp_fanos_mean, yerr=evoked_exp_fanos_sem, fmt='o-', label='Evoked Experimental', color='k')
         axs[0].set_xscale("log")
         axs[0].set_title(f'{area} - Max: {evoked_max_fano:.2f}, Freq: {evoked_max_fano_freq:.1f} Hz', fontsize=16)
         axs[0].set_xlabel('Bin Size (s)', fontsize=14)
         axs[0].set_ylabel('Fano Factor', fontsize=14)
         axs[0].legend(fontsize=14)
 
+        # Plot all experimental evoked traces with low alpha
+        for row in range(spont_bin_sizes.shape[0]):
+            axs[1].plot(spont_bin_sizes, spont_exp_fanos[row, :len(spont_bin_sizes)], color='gray', alpha=0.3)
+
         axs[1].errorbar(spont_bin_sizes, spontaneous_fanos_mean, yerr=spontaneous_fanos_sem, fmt='o-', label='Spontaneous Model', color='orange')
-        axs[1].errorbar(spont_bin_sizes, spont_exp_fanos_mean[:len(spont_bin_sizes)], yerr=spont_exp_fanos_sem[:len(spont_bin_sizes)], fmt='o-', label='Spontaneous Experimental', color='k')
+        axs[1].errorbar(spont_bin_sizes, spont_exp_fanos_mean, yerr=spont_exp_fanos_sem, fmt='o-', label='Spontaneous Experimental', color='k')
         axs[1].set_xscale("log")
         axs[1].set_title(f'{area} - Max: {spontaneous_max_fano:.2f}, Freq: {spontaneous_max_fano_freq:.1f} Hz', fontsize=16)
         axs[1].set_xlabel('Bin Size (s)', fontsize=14)
@@ -577,10 +613,155 @@ class OsiDsiCallbacks:
         plt.savefig(os.path.join(self.images_dir, 'Fano_Factor', f'{area}_epoch_{self.current_epoch}.png'), dpi=300, transparent=False)
         plt.close()
     
+    # def fano_factor_tf(self, spikes, area='', t_start=0.7, t_end=2.5, n_samples=100, 
+    #                     analyze_core_only=True, seed=42):
+    #     """
+    #     Compute the Fano factors for given spikes using TensorFlow ops and GPU acceleration.
+    #     spikes: TF tensor [n_trials, seq_len, n_neurons], spike counts
+    #     """
+    #     # Trim spikes to the desired time window
+    #     t_start_idx = int(t_start * 1000)
+    #     t_end_idx = int(t_end * 1000)
+    #     spikes = spikes[:, :, t_start_idx:t_end_idx, :]
+
+    #     if analyze_core_only:
+    #         # Isolate the core neurons
+    #         n_core_neurons = 51978 if area == 'v1' else 7414 
+    #         core_mask = other_billeh_utils.isolate_core_neurons(self.networks[area], n_selected_neurons=n_core_neurons, data_dir='GLIF_network')
+    #     else:
+    #         n_core_neurons = spikes.shape[-1]
+    #         core_mask = np.ones(n_core_neurons, dtype=bool)
+
+    #     # Calculate the Fano Factor for the spikes
+    #     pop_names = other_billeh_utils.pop_names(self.networks[area])
+    #     node_ei = np.array([pop_name[0] for pop_name in pop_names])
+    #     # Get the IDs for excitatory neurons
+    #     total_mask = np.logical_and(node_ei == 'e', core_mask)
+    #     n_e_neurons = np.sum(total_mask)
+    #     spikes = spikes[:, :, :, total_mask]
+    #     node_id_e = tf.range(0, n_e_neurons)
+    #     # Flatten trials if needed
+    #     spikes = np.reshape(spikes, [spikes.shape[0]*spikes.shape[1], spikes.shape[2], spikes.shape[3]])
+    #     n_trials = tf.shape(spikes)[0]
+    #     # bin sizes
+    #     bin_sizes = np.logspace(-3, 0, 20)
+    #     # bin_sizes_mask = bin_sizes < ((t_end - t_start) / 2.0)
+    #     bin_sizes_mask = bin_sizes < ((t_end - t_start) / 5.0)
+    #     bin_sizes = bin_sizes[bin_sizes_mask]
+    #     # Determine sample size distribution
+    #     if area == 'v1':
+    #         sample_size = 70
+    #         sample_std = 30
+    #     else:
+    #         sample_size = 33
+    #         sample_std = 14
+    #     base_seed = seed
+    #     sample_counts = tf.cast(tf.random.normal([n_samples], mean=sample_size, stddev=sample_std, seed=base_seed), tf.int32)
+    #     sample_counts = tf.clip_by_value(sample_counts, 15, n_e_neurons) 
+    #     # random trials
+    #     base_seed += 1
+    #     sample_trials = tf.random.uniform([n_samples], minval=0, maxval=n_trials, dtype=tf.int32, seed=base_seed)
+    #     # Shuffle excitatory IDs
+    #     base_seed += 1
+    #     shuffled_e_ids = tf.random.shuffle(node_id_e, seed=base_seed)
+    #     previous_id = tf.constant(0, dtype=tf.int32)
+    #     # Collect samples
+    #     selected_samples = tf.TensorArray(tf.float32, size=n_samples)
+    #     for i in tf.range(n_samples):
+    #         sample_num = sample_counts[i]
+    #         sample_trial = sample_trials[i]
+    #         # If we don't have enough left in shuffled_e_ids, reshuffle
+    #         if previous_id + sample_num > tf.size(shuffled_e_ids):
+    #             shuffled_e_ids = tf.random.shuffle(node_id_e, seed=base_seed)
+    #             previous_id = tf.constant(0, dtype=tf.int32)
+    #         sample_ids = shuffled_e_ids[previous_id:previous_id+sample_num]
+    #         previous_id += sample_num
+    #         # Sum spikes over selected neurons
+    #         trial_spikes = tf.constant(spikes[sample_trial, :, :], tf.float32)
+    #         selected_spikes = tf.reduce_sum(tf.gather(trial_spikes, sample_ids, axis=1), axis=-1)
+    #         selected_samples = selected_samples.write(i, selected_spikes)
+
+    #     # stack into [n_samples, seq_len]
+    #     selected_spikes_sample = selected_samples.stack()
+    #     fanos = pop_fano_tf(selected_spikes_sample, bin_sizes=bin_sizes)
+
+    #     return fanos, bin_sizes
+
+    # def fanos_figure_tf(self, spikes, area='', n_samples=100, analyze_core_only=True, data_dir='Synchronization_data'):
+    #     """
+    #     Compute Fano factors for both evoked and spontaneous conditions and plot the results.
+    #     """
+    #     # Evoked condition
+    #     evoked_fanos, evoked_bin_sizes = self.fano_factor_tf(spikes, area=area, t_start=0.7, t_end=2.5,
+    #                                                     n_samples=n_samples, analyze_core_only=analyze_core_only)
+    #     # Spontaneous condition
+    #     spont_fanos, spont_bin_sizes = self.fano_factor_tf(spikes, area=area, t_start=0.2, t_end=0.5,
+    #                                                 n_samples=n_samples, analyze_core_only=analyze_core_only)
+    #     # Postprocess the data
+    #     evoked_fanos_np = evoked_fanos.numpy()
+    #     spont_fanos_np = spont_fanos.numpy()
+    #     # Calculate mean and SEM
+    #     evoked_fanos_mean = np.nanmean(evoked_fanos_np, axis=1)
+    #     evoked_fanos_std = np.nanstd(evoked_fanos_np, axis=1)
+    #     evoked_fanos_sem = evoked_fanos_std / np.sqrt(n_samples)
+    #     spont_fanos_mean = np.nanmean(spont_fanos_np, axis=1)
+    #     spont_fanos_std = np.nanstd(spont_fanos_np, axis=1)
+    #     spont_fanos_sem = spont_fanos_std / np.sqrt(n_samples)
+    #     # Find max fanos and corresponding frequency
+    #     evoked_max_fano = np.nanmax(evoked_fanos_mean)
+    #     evoked_max_fano_freq = 1/(2*evoked_bin_sizes[np.nanargmax(evoked_fanos_mean)])
+    #     spont_max_fano = np.nanmax(spont_fanos_mean)
+    #     spont_max_fano_freq = 1/(2*spont_bin_sizes[np.nanargmax(spont_fanos_mean)])
+    #     # Load experimental data
+    #     evoked_exp_data_path = os.path.join(data_dir, f'Fano_factor_{area}', f'{area}_fano_running_1800ms_evoked.npy')
+    #     spont_exp_data_path = os.path.join(data_dir, f'Fano_factor_{area}', f'{area}_fano_running_300ms_spont.npy')
+    #     evoked_exp_fanos = np.load(evoked_exp_data_path, allow_pickle=True)
+    #     spont_exp_fanos = np.load(spont_exp_data_path, allow_pickle=True)
+    #     # Mask experimental data to match bin sizes
+    #     # Assuming experimental data was computed with the same initial bin_sizes array
+    #     # We'll just take the first len(evoked_bin_sizes) and len(spont_bin_sizes)
+    #     evoked_exp_fanos_mean = np.nanmean(evoked_exp_fanos, axis=0)[:len(evoked_bin_sizes)]
+    #     evoked_exp_fanos_std = np.nanstd(evoked_exp_fanos, axis=0)[:len(evoked_bin_sizes)]
+    #     evoked_exp_fanos_sem = evoked_exp_fanos_std / np.sqrt(evoked_exp_fanos.shape[0])
+    #     spont_exp_fanos_mean = np.nanmean(spont_exp_fanos, axis=0)[:len(spont_bin_sizes)]
+    #     spont_exp_fanos_std = np.nanstd(spont_exp_fanos, axis=0)[:len(spont_bin_sizes)]
+    #     spont_exp_fanos_sem = spont_exp_fanos_std / np.sqrt(spont_exp_fanos.shape[0])
+
+    #     # Plot the results
+    #     fig, axs = plt.subplots(1, 2, figsize=(12, 6), sharex=True, sharey=True)
+    #     # Plot all experimental evoked traces with low alpha
+    #     for row in range(evoked_exp_fanos.shape[0]):
+    #         axs[0].plot(evoked_bin_sizes, evoked_exp_fanos[row, :len(evoked_bin_sizes)], color='gray', alpha=0.3)
+            
+    #     axs[0].errorbar(evoked_bin_sizes, evoked_fanos_mean, yerr=evoked_fanos_sem, fmt='o-', label='Evoked Model', color='blue')
+    #     axs[0].errorbar(evoked_bin_sizes, evoked_exp_fanos_mean, yerr=evoked_exp_fanos_sem, fmt='o-', label='Evoked Experimental', color='k')
+    #     axs[0].set_xscale("log")
+    #     axs[0].set_title(f'{area} - Max: {evoked_max_fano:.2f}, Freq: {evoked_max_fano_freq:.1f} Hz', fontsize=16)
+    #     axs[0].set_xlabel('Bin Size (s)', fontsize=14)
+    #     axs[0].set_ylabel('Fano Factor', fontsize=14)
+    #     axs[0].legend(fontsize=14)
+
+    #     # Plot all experimental evoked traces with low alpha
+    #     for row in range(spont_bin_sizes.shape[0]):
+    #         axs[1].plot(spont_bin_sizes, spont_exp_fanos[row, :len(spont_bin_sizes)], color='gray', alpha=0.3)
+            
+    #     axs[1].errorbar(spont_bin_sizes, spont_fanos_mean, yerr=spont_fanos_sem, fmt='o-', label='Spontaneous Model', color='orange')
+    #     axs[1].errorbar(spont_bin_sizes, spont_exp_fanos_mean, yerr=spont_exp_fanos_sem, fmt='o-', label='Spontaneous Experimental', color='k')
+    #     axs[1].set_xscale("log")
+    #     axs[1].set_title(f'{area} - Max: {spont_max_fano:.2f}, Freq: {spont_max_fano_freq:.1f} Hz', fontsize=16)
+    #     axs[1].set_xlabel('Bin Size (s)', fontsize=14)
+    #     axs[1].legend(fontsize=14)
+
+    #     plt.tight_layout()
+    #     os.makedirs(os.path.join(self.images_dir, 'Fano_Factor'), exist_ok=True)
+    #     plt.savefig(os.path.join(self.images_dir, 'Fano_Factor', f'{area}_epoch_{self.current_epoch}_tf.png'), dpi=300, transparent=False)
+    #     plt.close()
+
+
     def power_spectrum(self, v1_spikes, lm_spikes, v1_spikes_spont=None, lm_spikes_spont=None, fs=1000, directory=''):
         # Sum the spikes over the batch size and all neurons to get a single spiking activity signal for each area
-        combined_spiking_activity_v1 = v1_spikes.mean(axis=1)
-        combined_spiking_activity_lm = lm_spikes.mean(axis=1)
+        combined_spiking_activity_v1 = v1_spikes.mean(axis=-1)
+        combined_spiking_activity_lm = lm_spikes.mean(axis=-1)
         v1_signal = exponential_decay_filter(combined_spiking_activity_v1)
         lm_signal = exponential_decay_filter(combined_spiking_activity_lm)
         # # Compute the power spectrum for the combined signal for each area
@@ -697,10 +878,11 @@ class OsiDsiCallbacks:
         # Separate the spontaneous and evoked spikes for the power spectrum
         # x_spont_spikes = x[0, :self.pre_delay, :]
         # x_evoked_spikes = x[0, self.pre_delay:-self.post_delay, :]
+        seq_len = v1_spikes.shape[1]
         v1_spont_spikes = v1_spikes[0, :self.pre_delay, :].astype(np.float32)
-        v1_evoked_spikes = v1_spikes[0, self.pre_delay:-self.post_delay, :].astype(np.float32)
+        v1_evoked_spikes = v1_spikes[0, self.pre_delay:seq_len-self.post_delay, :].astype(np.float32)
         lm_spont_spikes = lm_spikes[0, :self.pre_delay, :].astype(np.float32)
-        lm_evoked_spikes = lm_spikes[0, self.pre_delay:-self.post_delay, :].astype(np.float32)
+        lm_evoked_spikes = lm_spikes[0, self.pre_delay:seq_len-self.post_delay, :].astype(np.float32)
         # Plot the power spectrum of the neuronal activity
         self.power_spectrum(v1_evoked_spikes, lm_evoked_spikes, v1_spikes_spont=v1_spont_spikes, lm_spikes_spont=lm_spont_spikes, 
                             directory=os.path.join(self.images_dir, 'Power_spectrum_OSI_DSI'))
@@ -710,10 +892,6 @@ class OsiDsiCallbacks:
         self.plot_raster(x, v1_spikes, lm_spikes, angle=y)
 
     def osi_dsi_analysis(self, v1_spikes, lm_spikes, DG_angles):
-        # # Average the spikes over the number of trials
-        # v1_spikes = np.sum(v1_spikes, axis=0).astype(np.float32)/self.flags.n_trials_per_angle
-        # lm_spikes = np.sum(lm_spikes, axis=0).astype(np.float32)/self.flags.n_trials_per_angle
-
         # Do the OSI/DSI analysis       
         boxplots_dir = os.path.join(self.images_dir, 'Boxplots_OSI_DSI')
         os.makedirs(boxplots_dir, exist_ok=True)
@@ -728,7 +906,15 @@ class OsiDsiCallbacks:
         for axis_id, spikes, area in zip([0, 1], [v1_spikes, lm_spikes], ['v1', 'lm']):
             # Fano factor analysis
             print('Fano factor analysis for area: ', area)
-            self.fanos_figure(spikes, area=area, n_samples=100, analyze_core_only=True)
+            t_fano0 = time()
+            self.fanos_figure(spikes, area=area, n_samples=1000, analyze_core_only=True)
+            print('Fanos figure saved in ', time() - t_fano0, ' seconds!\n')
+
+            # print('Fano factor TF analysis for area: ', area)
+            # t_fano0 = time()
+            # self.fanos_figure_tf(spikes, area=area, n_samples=1000, analyze_core_only=True)
+            # print('Fanos TF figure saved in ', time() - t_fano0, ' seconds!\n')
+
             # Plot the tuning angle analysis
             self.plot_population_firing_rates_vs_tuning_angle(area, spikes, DG_angles)
             # Estimate tuning parameters from the model neurons
@@ -807,14 +993,18 @@ class ClassificationCallbacks:
                 self.no_improve_epochs = 0
                 self.checkpoint_epochs = 0
 
-        self.total_epochs = flags.n_runs * flags.n_epochs + self.checkpoint_epochs
+        # Total number of epochs to train
+        if flags.run_session == 0:
+            self.total_epochs = flags.n_runs * flags.n_epochs + self.checkpoint_epochs
+        else:
+            self.total_epochs = (flags.n_runs - flags.run_session) * flags.n_epochs + self.checkpoint_epochs
         # Manager for the best model
         self.best_manager = tf.train.CheckpointManager(
             checkpoint, directory=self.logdir + '/Best_model', max_to_keep=1
         )
         # Manager for osi/dsi checkpoints 
         self.epoch_manager = tf.train.CheckpointManager(
-            checkpoint, directory=self.logdir + '/Classification_checkpoints', max_to_keep=5
+            checkpoint, directory=self.logdir + '/Intermediate_checkpoints', max_to_keep=5
         )
 
     def on_train_begin(self):
@@ -853,7 +1043,7 @@ class ClassificationCallbacks:
             pkl.dump(data_to_save, f)
 
         if self.flags.n_runs > 1:
-            self.plot_osi_dsi(parallel=True)
+            self.save_intermediate_checkpoint()
 
     def on_epoch_start(self):
         self.epoch += 1
@@ -861,7 +1051,7 @@ class ClassificationCallbacks:
         self.epoch_init_time = time()
         date_str = dt.datetime.now().strftime('%d-%m-%Y %H:%M')
         print(f'Epoch {self.epoch:2d}/{self.total_epochs} @ {date_str}')
-        tf.print(f'Epoch {self.epoch:2d}/{self.total_epochs} @ {date_str}')
+        tf.print(f'\nEpoch {self.epoch:2d}/{self.total_epochs} @ {date_str}')
 
     def on_epoch_end(self, x, v1_spikes, lm_spikes, y, metric_values, verbose=True):
         
@@ -881,16 +1071,15 @@ class ClassificationCallbacks:
             self.initial_metric_values = metric_values
         
         if verbose:
-            print_str = f'  Validation:  - Angle: {float(y[0][0]):.2f}\n' 
+            print_str = f'  Validation:\n' 
             val_values = metric_values[len(metric_values)//2:]
-            print_str += '    ' + compose_str(val_values) 
+            print_str += '    ' + compose_str(val_values, mode='classification') 
             print(print_str)
             for gpu_id in range(len(self.strategy.extended.worker_devices)):
                 printgpu(gpu_id=gpu_id)
 
         for i, (key, value) in enumerate(self.epoch_metric_values.items()):
             self.epoch_metric_values[key] = value + [metric_values[i]]
-
 
         # self.epoch_metric_values = {key: value + [metric_values[i]] for i, (key, value) in enumerate(self.epoch_metric_values.items())}
 
@@ -908,8 +1097,11 @@ class ClassificationCallbacks:
             self.min_val_loss = val_loss_value
             self.no_improve_epochs = 0
             self.save_best_model()
-            self.plot_mean_firing_rate_boxplot(v1_spikes, lm_spikes, y)
-            self.plot_raster(x, v1_spikes, lm_spikes, y)
+            images_dir = self.logdir
+            self.classification_boxplots(x, v1_spikes, lm_spikes, y, images_dir=images_dir)
+            self.classification_rates(x, v1_spikes, lm_spikes, y, images_dir=images_dir)
+            self.plot_mean_firing_rate_boxplot(v1_spikes, lm_spikes, y, images_dir=images_dir)
+            self.plot_raster(x, v1_spikes, lm_spikes, y, images_dir=images_dir)
             self.model_variables_dict['Best'] = {var.name: var.numpy().astype(np.float16) for var in self.model.trainable_variables}
         else:
             self.no_improve_epochs += 1
@@ -934,18 +1126,62 @@ class ClassificationCallbacks:
         self.step += 1
         self.step_init_time = time()
         # reset the gpu memory stat
-        tf.config.experimental.reset_memory_stats('GPU:0')
+        # tf.config.experimental.reset_memory_stats('GPU:0')
 
-    def on_step_end(self, train_values, y, verbose=True):
+    def on_step_end(self, train_values, verbose=True):
         self.step_running_time.append(time() - self.step_init_time)
         if verbose:
-            print_str = f'  Step {self.step:2d}/{self.flags.steps_per_epoch} - Angle: {float(y[0][0]):.2f}\n'
-            print_str += '    ' + compose_str(train_values)
+            print_str = f'  Step {self.step:2d}/{self.flags.steps_per_epoch}\n'
+            print_str += '    ' + compose_str(train_values, mode='classification')
             print(print_str)
-            tf.print(print_str)
+            tf.print('\n'+print_str)
             print(f'    Step running time: {time() - self.step_init_time:.2f}s')
             for gpu_id in range(len(self.strategy.extended.worker_devices)):
                 printgpu(gpu_id=gpu_id)
+
+    # def on_step_end2(self, verbose=True):
+    #     self.step_running_time.append(time() - self.step_init_time)
+    #     if verbose:
+    #         print_str = f'  Step {self.step:2d}/{self.flags.steps_per_epoch}\n'
+    #         print(print_str)
+    #         tf.print(print_str)
+    #         print(f'    Step running time: {time() - self.step_init_time:.2f}s')
+    #         for gpu_id in range(len(self.strategy.extended.worker_devices)):
+    #             printgpu(gpu_id=gpu_id)
+
+    def on_testing_end(self, x, v1_spikes, lm_spikes, y, metric_values, verbose=True):
+        
+        if self.flags.dtype != 'float32':
+            v1_spikes = v1_spikes.numpy().astype(np.float32)
+            lm_spikes = lm_spikes.numpy().astype(np.float32)
+            x = x.numpy().astype(np.float32)
+            y = y.numpy().astype(np.float32)
+        else:
+            v1_spikes = v1_spikes.numpy()
+            lm_spikes = lm_spikes.numpy()
+            x = x.numpy()
+            y = y.numpy()
+
+        images_dir = os.path.join(self.logdir, 'Test', f'connected_areas_{self.flags.connected_areas}_conn_rec_{self.flags.connected_recurrent_connections}_conn_noise_{self.flags.connected_noise}')
+                
+        if verbose:
+            print_str = f'  Validation:\n' 
+            val_values = metric_values[len(metric_values)//2:]
+            print_str += '    ' + compose_str(val_values, mode='classification') 
+            print(print_str)
+            # Save print_str to a file in images_dir
+            os.makedirs(images_dir, exist_ok=True)
+            with open(os.path.join(images_dir, 'validation_output.txt'), 'w') as f:
+                f.write(print_str)
+
+            for gpu_id in range(len(self.strategy.extended.worker_devices)):
+                printgpu(gpu_id=gpu_id)
+
+        self.classification_boxplots(x, v1_spikes, lm_spikes, y, images_dir=images_dir)
+        self.classification_stripplot(v1_spikes, y, images_dir=images_dir)
+        self.classification_rates(x, v1_spikes, lm_spikes, y, images_dir=images_dir)
+        self.plot_mean_firing_rate_boxplot(v1_spikes, lm_spikes, y, images_dir=images_dir)
+        self.plot_raster(x, v1_spikes, lm_spikes, y, images_dir=images_dir)
         
     def save_best_model(self):
         # self.step_counter.assign_add(1)
@@ -980,9 +1216,9 @@ class ClassificationCallbacks:
         plt.savefig(os.path.join(images_dir, f'classification_losses_curves_epoch.png'), dpi=300, transparent=False)
         plt.close()
     
-    def plot_raster(self, x, v1_spikes, lm_spikes, y):
+    def plot_raster(self, x, v1_spikes, lm_spikes, y, images_dir=''):
         seq_len = v1_spikes.shape[1]
-        images_dir = os.path.join(self.logdir, 'Classification_Raster_plots')
+        images_dir = os.path.join(images_dir, 'Classification_Raster_plots')
         os.makedirs(images_dir, exist_ok=True)
         graph = InputActivityFigure(
                                     self.networks,
@@ -997,10 +1233,10 @@ class ClassificationCallbacks:
                                     )
         graph(x, v1_spikes, lm_spikes)
 
-    def plot_mean_firing_rate_boxplot(self, v1_spikes, lm_spikes, y):
+    def plot_mean_firing_rate_boxplot(self, v1_spikes, lm_spikes, y, images_dir=''):
         seq_len = v1_spikes.shape[1]
         DG_angles = y
-        boxplots_dir = os.path.join(self.logdir, f'Boxplots_classification/{self.neuropixels_feature}')
+        boxplots_dir = os.path.join(images_dir, f'Boxplots_classification/{self.neuropixels_feature}')
         os.makedirs(boxplots_dir, exist_ok=True)
         fig, axs = plt.subplots(2, 1, figsize=(12, 14))
         for axis_id, spikes, area in zip([0, 1], [v1_spikes, lm_spikes], ['v1', 'lm']):
@@ -1020,19 +1256,195 @@ class ClassificationCallbacks:
         plt.savefig(os.path.join(boxplots_dir, f'epoch_{self.epoch}.png'), dpi=300, transparent=False)
         plt.close()
 
-    def plot_osi_dsi(self, parallel=False):
-        print('Starting to plot OSI and DSI...')
-        # Save the checkpoint to reload weights in the osi_dsi_estimator
-        if parallel:
-            p = self.epoch_manager.save(checkpoint_number=self.epoch)
-            print(f'Checkpoint model saved in {p}\n')
-        else:            
-            print(f'Not running OSI/DSI analysis.')
-            pass
-                    
+    def classification_boxplots(self, x_spikes, v1_spikes, lm_spikes, y, images_dir=''):
+        total_trials = min(v1_spikes.shape[0], 5)
+        for trial_id in range(total_trials):
+            boxplots_dir = os.path.join(images_dir, f'Readout_Populations', f'Epoch {self.epoch}')
+            os.makedirs(boxplots_dir, exist_ok=True)
+            # fig, axs = plt.subplots(2, 1, figsize=(12, 14))
+            fig, ax = plt.subplots(figsize=(12, 6))
+            # Calculate mean firing rates for each population
+            readout_sums = {}
+            for i in range(10):
+                neurons_ids = self.networks['v1'][f'readout_neuron_ids_{i}'][0]
+                readout_spikes = v1_spikes[trial_id, -self.post_delay:, neurons_ids]  # Last 50 timesteps
+                readout_sums[f'{i}'] = np.sum(readout_spikes, axis=0)
+            # Convert to a format suitable for plotting
+            populations = list(readout_sums.keys())
+            data = [readout_sums[pop] for pop in populations]
+            # Calculate the total sum of spikes for each population
+            total_sum = [np.sum(data[i]) for i in range(len(data))]
+            largest_population_index = np.argmax(total_sum)
+            # largest_population = populations[largest_population_index]
+            # Target readout population (`y[-1]`)
+            target_population_index = int(y[trial_id][-1])
+            # target_population = f'Readout {target_population_index}'
+            # Plotting the barplot with summed spikes for each population
+            data_for_plotting = pd.DataFrame({
+                'Population': populations,
+                'Total Spikes': total_sum
+            })
 
+            max_spikes = data_for_plotting['Total Spikes'].max()
+            # get the ylim with 25% larger than max value
+            ylim = max_spikes + max_spikes * 0.3
+            # data_for_plotting.loc[data_for_plotting['Population']=='4', 'Total Spikes'] = 6
+            # Seaborn barplot with suggested colors
+            # plt.figure(figsize=(12, 6))
+            sns.barplot(data=data_for_plotting, x='Population', y='Total Spikes', color='lightgray', edgecolor='black', ax=ax)
+            # Highlighting specific populations with suggested colors
+            # ax = plt.gca()
+            bars = ax.patches
+            # Apply colors to bars
+            for i, bar in enumerate(bars):
+                if i == largest_population_index:
+                    bar.set_color('gold')  # Largest population
+                    bar.set_edgecolor('black')
+                elif i == target_population_index:
+                    bar.set_color('teal')  # Target population
+                    bar.set_edgecolor('black')
+            # Customize the plot
+            ax.set_ylabel('Readout Population Spikes', fontsize=20)
+            ax.set_xlabel('Readout Populations', fontsize=20)
+            ax.set_ylim(0, ylim)
+            # plt.title('Summed Spikes for Each Readout Population')
+            ax.legend(handles=[
+                plt.Line2D([0], [0], color='gold', lw=4, label=f'Decision'),
+                plt.Line2D([0], [0], color='teal', lw=4, label=f'Label')
+            ], loc='upper left', fontsize=20, framealpha=0.6)
+
+            # Add inset with MNIST image
+            inset_ax = fig.add_axes([0.75, 0.7, 0.2, 0.3])  # [x, y, width, height] relative to figure
+            # inset_ax.imshow(images[9].squeeze(), cmap='gray')
+            data = '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/lgn_model/data/lgn_full_col_cells_240x120.csv'
+            df = pd.read_csv(data, sep=' ')
+            lgn_x = df['x']
+            lgn_y = df['y']
+            rates = np.sum(x_spikes[trial_id, self.pre_delay:-self.post_delay, :], axis=0)
+            # Create a 2D grid for the rates
+            grid_x, grid_y = np.meshgrid(np.arange(240), np.arange(120))
+            rate_grid = np.zeros_like(grid_x, dtype=float)
+            # Populate the rate grid using positions x and y
+            for i in range(len(lgn_x)):
+                x_grid = int(lgn_x[i])
+                y_grid = int(lgn_y[i])
+                rate_grid[y_grid, x_grid] += rates[i]
+
+            inset_ax.imshow(rate_grid, cmap='hot', interpolation='nearest')
+            inset_ax.axis('off')  # No axis for the image
+
+            fig.tight_layout()
+            fig.savefig(os.path.join(boxplots_dir, f'trial_{trial_id}.png'), dpi=300, transparent=False)
+            plt.close()
+
+    def classification_stripplot(self, v1_spikes, labels, images_dir=''):
+        total_trials = min(v1_spikes.shape[0], 5)  # Limit to 5 trials
+        for trial_id in range(total_trials):
+            # Create the directory for saving images
+            boxplots_dir = os.path.join(images_dir, f'Readout_Populations', f'Epoch {self.epoch}')
+            os.makedirs(boxplots_dir, exist_ok=True)
+            # Calculate mean firing rates for each population
+            readout_sums = {}
+            for i in range(10):
+                neurons_ids = self.networks['v1'][f'readout_neuron_ids_{i}'][0]
+                readout_spikes = v1_spikes[trial_id, -self.post_delay:, neurons_ids]  # Last `post_delay` timesteps
+                readout_sums[f'{i}'] = np.sum(readout_spikes, axis=0)
+            # Convert to a format suitable for plotting
+            populations = list(readout_sums.keys())
+            data = [readout_sums[pop] for pop in populations]
+            # Determine the population with the largest mean firing rate
+            total_sum = [np.sum(data[i]) for i in range(len(data))]
+            largest_population_index = np.argmax(total_sum)
+            # largest_population = populations[largest_population_index]
+            # Target readout population
+            target_population_index = int(labels[trial_id][-1])
+            # target_population = f'Readout {target_population_index}'
+            # Plotting the stripplot
+            fig, ax = plt.subplots(figsize=(12, 6))
+            sns.stripplot(data=data, ax=ax)
+            ax.set_xticks(range(len(populations)))
+            ax.set_xticklabels(populations, rotation=0)
+            # Set y-axis to integer values
+            ax.yaxis.get_major_locator().set_params(integer=True)
+            ax.set_ylabel('Number of spikes')
+            ax.set_title(f'Summed Spikes for Each Readout Population - Trial {trial_id}')
+            # Add rectangles to highlight specific populations
+            rect = plt.Rectangle((largest_population_index - 0.4, ax.get_ylim()[0]),
+                                 0.8, ax.get_ylim()[1] - ax.get_ylim()[0],
+                                 color='red', alpha=0.2, label=f'Decision')
+            ax.add_patch(rect)
+            rect2 = plt.Rectangle((target_population_index - 0.4, ax.get_ylim()[0]),
+                                  0.8, ax.get_ylim()[1] - ax.get_ylim()[0],
+                                  color='blue', alpha=0.2, label=f'Label')
+            ax.add_patch(rect2)
+            # Ensure labels don't duplicate in legend
+            handles, labels = ax.get_legend_handles_labels()
+            unique_labels = dict(zip(labels, handles))
+            ax.legend(unique_labels.values(), unique_labels.keys(), loc='upper right')
+            ax.set_xlabel('Readout Populations')
+            # Save the figure
+            fig.tight_layout()
+            fig.savefig(os.path.join(boxplots_dir, f'trial_{trial_id}_stripplot.png'), dpi=300, transparent=False)
+            plt.close()
+            
+    def classification_rates(self, x_spikes, v1_spikes, lm_spikes, y, images_dir=''):
+        total_trials = min(v1_spikes.shape[0], 5)
+        for trial_id in range(total_trials):
+            # Set up directories for saving plots
+            image_dir = os.path.join(images_dir, f'Readout_Populations', f'Epoch {self.epoch}')
+            os.makedirs(image_dir, exist_ok=True)
+            # Create the main figure
+            fig, ax = plt.subplots(figsize=(12, 6))
+            # Calculate mean firing rates for each population with gaussian smoothing
+            frs = other_billeh_utils.firing_rates_smoothing(v1_spikes.astype(np.float32), sampling_rate=1000, window_size=10)[0]
+            
+            for i in range(10):
+                neurons_ids = self.networks['v1'][f'readout_neuron_ids_{i}'][0]
+                readout_spikes = frs[trial_id][:, neurons_ids]
+                readout_sum = np.mean(readout_spikes, axis=1)  # Mean firing rate in Hz
+                ax.plot(np.arange(frs.shape[1]), readout_sum, label=f'{i}')
+            
+            # Highlight time periods
+            ax.axvspan(0, 50, color='gray', alpha=0.3)
+            ax.axvspan(50, 150, color='green', alpha=0.1)
+            ax.axvspan(150, 200, color='gray', alpha=0.3)
+            # Adjust legend
+            ax.legend(title="Readout Populations", loc="upper left", ncol=2)
+            # Customize labels and axis limits
+            ax.set_xlabel("Time (ms)", fontsize=14)
+            ax.set_ylabel("Average Firing Rate (Hz)", fontsize=14)
+            ax.set_xlim(0, 200)
+            # Add an inset with LGN activity
+            inset_ax = fig.add_axes([0.4, 0.7, 0.25, 0.25])  # [x, y, width, height] relative to figure
+            data = '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/lgn_model/data/lgn_full_col_cells_240x120.csv'
+            df = pd.read_csv(data, sep=' ')
+            lgn_x = df['x']
+            lgn_y = df['y']
+            rates = np.sum(x_spikes[trial_id, self.pre_delay:-self.post_delay, :], axis=0)
+            # Create a 2D grid for the rates
+            grid_x, grid_y = np.meshgrid(np.arange(240), np.arange(120))
+            rate_grid = np.zeros_like(grid_x, dtype=float)
+            for i in range(len(lgn_x)):
+                x_grid = int(lgn_x[i])
+                y_grid = int(lgn_y[i])
+                rate_grid[y_grid, x_grid] += rates[i]
+            
+            inset_ax.imshow(rate_grid, cmap='hot', interpolation='nearest')
+            inset_ax.axis('off')  # No axis for the image
+            
+            # Tight layout and save the figure
+            fig.tight_layout()
+            fig.savefig(os.path.join(image_dir, f'trial_{trial_id}_firing_rates.png'), dpi=300, transparent=False)
+            plt.close()
+
+    def save_intermediate_checkpoint(self):
+        # Save the checkpoint to reload weights in the osi_dsi_estimator
+        p = self.epoch_manager.save(checkpoint_number=self.epoch)
+        print(f'Checkpoint model saved in {p}\n')
+       
+                    
 class Callbacks:
-    def __init__(self, networks, lgn_inputs, bkg_inputs, model, optimizer, distributed_roll_out, flags, logdir, strategy, 
+    def __init__(self, networks, lgn_inputs, bkg_inputs, model, optimizer, flags, logdir, strategy, 
                 metrics_keys, pre_delay=50, post_delay=50, checkpoint=None, model_variables_init=None, 
                 save_optimizer=True, spontaneous_training=False):
 
@@ -1049,7 +1461,6 @@ class Callbacks:
         self.flags = flags
         self.logdir = logdir
         self.strategy = strategy
-        self.distributed_roll_out = distributed_roll_out
         self.metrics_keys = metrics_keys
         self.pre_delay = pre_delay
         self.post_delay = post_delay
@@ -1105,7 +1516,7 @@ class Callbacks:
         )
         # Manager for osi/dsi checkpoints 
         self.epoch_manager = tf.train.CheckpointManager(
-            checkpoint, directory=self.logdir + '/OSI_DSI_checkpoints', max_to_keep=5
+            checkpoint, directory=self.logdir + '/Intermediate_checkpoints', max_to_keep=5
         )
 
     def on_train_begin(self):
@@ -1154,7 +1565,7 @@ class Callbacks:
         #     print(f'Time spent in {var}: {time()-t0}')
 
         if self.flags.n_runs > 1:
-            self.plot_osi_dsi(parallel=True)
+            self.save_intermediate_checkpoint()
 
     def on_epoch_start(self):
         self.epoch += 1
@@ -1190,9 +1601,9 @@ class Callbacks:
             self.initial_metric_values = metric_values
         
         if verbose:
-            print_str = f'  Validation:  - Angle: {float(y[0][0]):.2f}\n' 
+            print_str = f'  Validation:\n' 
             val_values = metric_values[len(metric_values)//2:]
-            print_str += '    ' + compose_str(val_values) 
+            print_str += '    ' + compose_str(val_values, mode='functional_training') 
             print(print_str)
             for gpu_id in range(len(self.strategy.extended.worker_devices)):
                 printgpu(gpu_id=gpu_id)
@@ -1245,10 +1656,6 @@ class Callbacks:
 
         else:
             self.no_improve_epochs += 1
-           
-        # # Plot osi_dsi if only 1 run and the osi/dsi period is reached
-        # if self.flags.n_runs == 1 and (self.epoch % self.flags.osi_dsi_eval_period == 0 or self.epoch==1):
-        #     self.plot_osi_dsi(parallel=False)
 
         with self.summary_writer.as_default():
             for k, v in zip(self.metrics_keys, metric_values):
@@ -1270,13 +1677,13 @@ class Callbacks:
         self.step += 1
         self.step_init_time = time()
         # reset the gpu memory stat
-        tf.config.experimental.reset_memory_stats('GPU:0')
+        # tf.config.experimental.reset_memory_stats('GPU:0')
 
     def on_step_end(self, train_values, y, verbose=True):
         self.step_running_time.append(time() - self.step_init_time)
         if verbose:
-            print_str = f'  Step {self.step:2d}/{self.flags.steps_per_epoch} - Angle: {float(y[0][0]):.2f}\n'
-            print_str += '    ' + compose_str(train_values)
+            print_str = f'  Step {self.step:2d}/{self.flags.steps_per_epoch}: \n'
+            print_str += '    ' + compose_str(train_values, mode='functional_training')
             print(print_str)
             tf.print(print_str)
             print(f'    Step running time: {time() - self.step_init_time:.2f}s')
@@ -1352,12 +1759,13 @@ class Callbacks:
                                     images_dir,
                                     filename=f'Epoch_{self.epoch}_complete',
                                     frequency=self.flags.temporal_f,
-                                    stimuli_init_time=seq_len+self.pre_delay,
-                                    stimuli_end_time=2*seq_len-self.post_delay,
+                                    stimuli_init_time=int(seq_len/2) + self.pre_delay,
+                                    stimuli_end_time=seq_len - self.post_delay,
                                     reverse=False,
                                     plot_core_only=plot_core_only,
                                     )
         graph(x, v1_spikes, lm_spikes)
+        tf.print(seq_len+self.pre_delay, 2*seq_len+self.pre_delay)
 
     def plot_bkg_noise(self, x, bin_width_ms=10):
         x = x[0, :, :]
@@ -2065,102 +2473,9 @@ class Callbacks:
     #         # save the df
     #         df.to_csv('error.csv')
     
-    def plot_osi_dsi(self, parallel=False):
-        print('Starting to plot OSI and DSI...')
+    def save_intermediate_checkpoint(self):
         # Save the checkpoint to reload weights in the osi_dsi_estimator
-        if parallel:
-            p = self.epoch_manager.save(checkpoint_number=self.epoch)
-            print(f'Checkpoint model saved in {p}\n')
-        else:              
-            # osi_dsi_data_set = self.strategy.distribute_datasets_from_function(self.get_osi_dsi_dataset_fn(regular=True))
-            DG_angles = np.arange(0, 360, 45)
-            osi_dataset_path = os.path.join('OSI_DSI_dataset', 'lgn_firing_rates.pkl')
-            if not os.path.exists(osi_dataset_path):
-                print('Creating OSI/DSI dataset...')
-                # Define OSI/DSI dataset
-                def get_osi_dsi_dataset_fn(regular=False):
-                    def _f(input_context):
-                        post_delay = self.flags.seq_len - (2500 % self.flags.seq_len)
-                        _lgn_firing_rates = stim_dataset.generate_drifting_grating_tuning(
-                            seq_len=2500+post_delay,
-                            pre_delay=500,
-                            post_delay = post_delay,
-                            n_input=self.flags.n_input,
-                            regular=regular,
-                            return_firing_rates=True,
-                            rotation=self.flags.rotation,
-                            billeh_phase=True,
-                        ).batch(1)
-                                    
-                        return _lgn_firing_rates
-                    return _f
-            
-                osi_dsi_data_set = self.strategy.distribute_datasets_from_function(get_osi_dsi_dataset_fn(regular=True))
-                test_it = iter(osi_dsi_data_set)
-                lgn_firing_rates_dict = {}  # Dictionary to store firing rates
-                for angle_id, angle in enumerate(DG_angles):
-                    t0 = time()
-                    lgn_firing_rates = next(test_it)
-                    lgn_firing_rates_dict[angle] = lgn_firing_rates.numpy()
-                    print(f'Angle {angle} done.')
-                    print(f'    Trial running time: {time() - t0:.2f}s')
-                    for gpu_id in range(len(self.strategy.extended.worker_devices)):
-                        printgpu(gpu_id=gpu_id)
-
-                # Save the dataset      
-                results_dir = os.path.join("OSI_DSI_dataset")
-                os.makedirs(results_dir, exist_ok=True)
-                with open(osi_dataset_path, 'wb') as f:
-                    pkl.dump(lgn_firing_rates_dict, f)
-                print('OSI/DSI dataset created successfully!')
-
-            else:
-                # Load the LGN firing rates dataset
-                with open(osi_dataset_path, 'rb') as f:
-                    lgn_firing_rates_dict = pkl.load(f)
-
-            callbacks = OsiDsiCallbacks(self.networks, self.lgn_inputs, self.bkg_inputs, self.flags, self.logdir, current_epoch=self.epoch,
-                                        pre_delay=500, post_delay=500, model_variables_init=None)
-
-            sim_duration = (2500//self.flags.seq_len + 1) * self.flags.seq_len
-            n_trials_per_angle = 10
-            v1_spikes = np.zeros((n_trials_per_angle, len(DG_angles), sim_duration, self.networks['v1']['n_nodes']), dtype=np.uint8)
-            lm_spikes = np.zeros((n_trials_per_angle, len(DG_angles), sim_duration, self.networks['lm']['n_nodes']), dtype=np.uint8)
-            
-            for angle_id, angle in enumerate(DG_angles):
-                # load LGN firign rates for the given angle and calculate spiking probability
-                lgn_fr = lgn_firing_rates_dict[angle]
-                lgn_fr = tf.constant(lgn_fr, dtype=tf.float32)
-                _p = 1 - tf.exp(-lgn_fr / 1000.)
-
-                for trial_id in range(n_trials_per_angle):
-                    t0 = time()
-                    # Reset the memory stats
-                    tf.config.experimental.reset_memory_stats('GPU:0')
-                    # Generate LGN spikes
-                    x = tf.random.uniform(tf.shape(_p)) < _p
-                    y = tf.constant(angle, dtype=tf.float32, shape=(1,1))
-                    w = tf.constant(sim_duration, dtype=tf.float32, shape=(1,))
-
-                    # x, y, _, w = next(test_it)
-                    chunk_size = self.flags.seq_len
-                    num_chunks = (2500//chunk_size + 1)
-                    for i in range(num_chunks):
-                        chunk = x[:, i * chunk_size : (i + 1) * chunk_size, :]
-                        _out, _, _, _, _ = self.distributed_roll_out(chunk, y, w)
-                        v1_z_chunk, lm_z_chunk = _out[0][0], _out[0][2]
-                        # v1_z_chunk, lm_z_chunk, _ = results
-                        v1_spikes[trial_id, angle_id, i * chunk_size : (i + 1) * chunk_size, :] += v1_z_chunk.numpy()[0, :, :].astype(np.uint8)
-                        lm_spikes[trial_id, angle_id, i * chunk_size : (i + 1) * chunk_size, :] += lm_z_chunk.numpy()[0, :, :].astype(np.uint8)
-
-                    if trial_id == 0 and angle_id == 0:
-                        # Raster plot for 0 degree orientation
-                        callbacks.single_trial_callbacks(x.numpy(), v1_spikes[0], lm_spikes[0], y=angle)
-
-                    print(f'Trial {trial_id+1}/{n_trials_per_angle} - Angle {angle} done.')
-                    print(f'    Trial running time: {time() - t0:.2f}s')
-                    for gpu_id in range(len(self.strategy.extended.worker_devices)):
-                        printgpu(gpu_id=gpu_id)
+        p = self.epoch_manager.save(checkpoint_number=self.epoch)
+        print(f'Checkpoint model saved in {p}\n')
         
-            callbacks.osi_dsi_analysis(v1_spikes, lm_spikes, DG_angles)
                 
