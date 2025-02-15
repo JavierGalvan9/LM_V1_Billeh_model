@@ -66,9 +66,10 @@ def calculate_OSI_DSI(firingRates, network, session='drifting_gratings', DG_angl
         if n_trials >= 8:
             TuningAngleEstimation = PreferredTuningAngleAnalysis(firing_rates=firingRates, orientations=DG_angles, 
                                                                 preferred_orientations=network['tuning_angle'], area=area)
-            new_tuning_angles, preferred_angle_rates = TuningAngleEstimation.calculate_tuning_angle()
+            new_tuning_angles, preferred_angle_rates, osi_p_values = TuningAngleEstimation.calculate_tuning_angle()
             osi_dsi_df["max_mean_rate(Hz)"] = preferred_angle_rates
             osi_dsi_df["preferred_angle"] = new_tuning_angles
+            osi_dsi_df["OSI_p_value"] = osi_p_values
         else:
             osi_dsi_df["preferred_angle"] = DG_angles[np.argmax(all_direction_rates, axis=0)]
             osi_dsi_df["max_mean_rate(Hz)"] = np.max(all_direction_rates, axis=0)
@@ -100,6 +101,11 @@ def calculate_OSI_DSI(firingRates, network, session='drifting_gratings', DG_angl
         osi_dsi_df['firing_rate_sp'] = average_all_direction_rates
         if remove_zero_rate_neurons:
             osi_dsi_df = osi_dsi_df[osi_dsi_df["firing_rate_sp"] != 0]
+
+    elif session == 'natural':
+        osi_dsi_df['firing_rate_ns'] = average_all_direction_rates
+        if remove_zero_rate_neurons:
+            osi_dsi_df = osi_dsi_df[osi_dsi_df["firing_rate_ns"] != 0]
 
     if save_df:
         os.makedirs(directory, exist_ok=True)
@@ -177,6 +183,7 @@ class PreferredTuningAngleAnalysis:
         self.alpha = self.orientations[1] - self.orientations[0]
         self.preferred_orientations = preferred_orientations
         self.area = area
+        self.osi_p_values = []
         self.new_tuning_angles = []
         self.max_firing_rates = []
 
@@ -207,7 +214,7 @@ class PreferredTuningAngleAnalysis:
         # Compute the p-value from the F-distribution
         p_value = 1 - f_distribution.cdf(f_statistic, df1, df2)
         # Significant if p-value < 0.01
-        return p_value < 0.05
+        return p_value
 
     def get_bounds(self, M):
         # Define contraints on the fit parameters from the double gaussian
@@ -256,12 +263,15 @@ class PreferredTuningAngleAnalysis:
             neuron_responses = np.mean(neuron_responses_all_trials, axis=0)
 
             if np.sum(neuron_responses_all_trials) == 0:
+                self.osi_p_values.append(np.nan)
                 self.new_tuning_angles.append(np.nan)
                 self.max_firing_rates.append(np.max(neuron_responses))
                 continue
             
             orientation_vectors = self.calculate_orientation_vectors(neuron_responses_all_trials, self.orientations)
-            if not self.hotelling_t2_test(orientation_vectors):
+            p_value = self.hotelling_t2_test(orientation_vectors)
+            self.osi_p_values.append(p_value)
+            if p_value < 0.05:
                 self.new_tuning_angles.append(np.nan)
                 self.max_firing_rates.append(np.max(neuron_responses))
                 continue
@@ -313,15 +323,16 @@ class PreferredTuningAngleAnalysis:
                 self.new_tuning_angles.append(np.nan)
                 self.max_firing_rates.append(np.max(neuron_responses))
 
+        self.osi_p_values = np.array(self.osi_p_values)
         self.new_tuning_angles = np.array(self.new_tuning_angles) 
         self.max_firing_rates = np.array(self.max_firing_rates)
 
-        return self.new_tuning_angles, self.max_firing_rates
+        return self.new_tuning_angles, self.max_firing_rates, self.osi_p_values
 
 class ModelMetricsAnalysis:    
 
     def __init__(self, spikes, DG_angles, network, data_dir='GLIF_network', 
-                 drifting_gratings_init=None, drifting_gratings_end=None, spontaneous_init=None, spontaneous_end=None,
+                 drifting_gratings_init=None, drifting_gratings_end=None, spontaneous_init=None, spontaneous_end=None, natural_init=None, natural_end=None,
                  area='v1', analyze_core_only=True, save_df=False, df_directory='Metrics_analysis'):
         self.n_neurons = network['n_nodes']
         self.network = network
@@ -331,6 +342,8 @@ class ModelMetricsAnalysis:
         self.drifting_gratings_end = drifting_gratings_end
         self.spontaneous_init = spontaneous_init
         self.spontaneous_end = spontaneous_end
+        self.natural_init = natural_init
+        self.natural_end = natural_end
         self.analyze_core_only = analyze_core_only
         # Isolate the core neurons if necessary
         if self.analyze_core_only:
@@ -377,6 +390,12 @@ class ModelMetricsAnalysis:
             spontaneous_firingRates = calculate_Firing_Rate(spikes, stimulus_init=self.spontaneous_init,
                                                             stimulus_end=self.spontaneous_end, temporal_axis=2)
             self.metrics_df = calculate_OSI_DSI(spontaneous_firingRates, self.network, session='spontaneous', DG_angles=DG_angles,
+                                                n_selected_neurons=n_neurons_plot, remove_zero_rate_neurons=False, area=self.area, directory=df_directory, save_df=save_df)
+
+        if self.natural_init is not None:
+            natural_firingRates = calculate_Firing_Rate(spikes, stimulus_init=self.natural_init,
+                                                            stimulus_end=self.natural_end, temporal_axis=2)
+            self.metrics_df = calculate_OSI_DSI(natural_firingRates, self.network, session='natural', DG_angles=DG_angles,
                                                 n_selected_neurons=n_neurons_plot, remove_zero_rate_neurons=False, area=self.area, directory=df_directory, save_df=save_df)
 
         # if self.drifting_gratings_init is not None and self.spontaneous_init is not None:
@@ -627,7 +646,7 @@ class MetricsBoxplot:
         # Load the data csv file and remove rows with empty cell type
         # Rename the cell types
         if data_dir == "Neuropixels_data":
-            features_to_load = ['ecephys_unit_id', 'cell_type', 'firing_rate_sp', 'Ave_Rate(Hz)', "max_mean_rate(Hz)", "OSI", "DSI"]
+            features_to_load = ['ecephys_unit_id', 'cell_type', 'firing_rate_ns', 'firing_rate_sp', 'Ave_Rate(Hz)', "max_mean_rate(Hz)", "OSI", "DSI"]
             df = pd.read_csv(f"{data_dir}/{metric_file}", index_col=0, sep=" ", usecols=features_to_load).dropna(how='all')
             df = df[df['cell_type'].notna()]
             df["cell_type"] = df["cell_type"].apply(self.neuropixels_cell_type_to_cell_type)
@@ -651,7 +670,10 @@ class MetricsBoxplot:
             df.loc[nonresponding, "OSI"] = np.nan
             df.loc[nonresponding, "DSI"] = np.nan
         if 'firing_rate_sp' in df.columns:
-            df.rename(columns={"firing_rate_sp": "Spontaneous rate (Hz)"}, inplace=True)            
+            df.rename(columns={"firing_rate_sp": "Spontaneous rate (Hz)"}, inplace=True)          
+
+        if 'firing_rate_ns' in df.columns:
+            df.rename(columns={"firing_rate_ns": "Natural scenes rates(Hz)"}, inplace=True)  
 
         # Sort the neurons by neuron types
         df = df.sort_values(by="cell_type")
@@ -662,7 +684,7 @@ class MetricsBoxplot:
         else:
             df["data_type"] = data_dir
 
-        columns = ["cell_type", "data_type", "Rate at preferred direction (Hz)", "OSI", "DSI", 'Ave_Rate(Hz)', 'Spontaneous rate (Hz)']
+        columns = ["cell_type", "data_type", "Rate at preferred direction (Hz)", "OSI", "DSI", 'Ave_Rate(Hz)', 'Spontaneous rate (Hz)', "Natural scenes rates(Hz)"]
         # Ensure all required columns exist in the DataFrame, fill with NaN if not present
         for col in columns:
             if col not in df.columns:
@@ -719,7 +741,7 @@ class MetricsBoxplot:
         cell_type_order = np.sort(df['cell_type'].unique())
 
         for idx, metric in enumerate(metrics):
-            if metric in ["Rate at preferred direction (Hz)", 'Ave_Rate(Hz)', 'Spontaneous rate (Hz)']:
+            if metric in ["Rate at preferred direction (Hz)", 'Ave_Rate(Hz)', 'Spontaneous rate (Hz)', "Natural scenes rates(Hz)"]:
                 ylims = [0, 100]
             else:
                 ylims = [0, 1]

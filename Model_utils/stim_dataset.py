@@ -8,6 +8,16 @@ import lgn_model.lgn as lgn_module
 # from pympler.asizeof import asizeof, asized
 # from time import time
 
+### GENERAL FUNCTIONS ###
+@tf.function(jit_compile=True)
+def movies_concat(movie, pre_delay, post_delay, dtype=tf.float32):       
+    # add an gray screen period before and after the movie
+    z1 = tf.zeros((pre_delay, movie.shape[1], movie.shape[2], movie.shape[3]), dtype=dtype)
+    z2 = tf.zeros((post_delay, movie.shape[1], movie.shape[2], movie.shape[3]), dtype=dtype)
+    videos = tf.concat((z1, movie, z2), 0)
+    return videos
+
+### DRIFTING GRATINGS STIMULUS GENERATION ###
 @tf.function(jit_compile=True)
 def make_drifting_grating_stimulus(row_size=120, col_size=240, moving_flag=True, image_duration=100, cpd=0.05,
                                    temporal_f=2, theta=0, phase=0, contrast=1.0, dtype=tf.float32):
@@ -25,7 +35,7 @@ def make_drifting_grating_stimulus(row_size=120, col_size=240, moving_flag=True,
     # row_size = row_size*2 # somehow, Franz's code only accept larger size; thus, i did the mulitplication
     # col_size = col_size*2
     frame_rate = 1000  # Hz
-    t_min = 0
+    # t_min = 0
     t_max = tf.cast(image_duration, tf.float32) / 1000
     pi = tf.constant(np.pi, dtype=dtype)
 
@@ -36,15 +46,13 @@ def make_drifting_grating_stimulus(row_size=120, col_size=240, moving_flag=True,
 
     # physical_spacing = 1. / (float(cpd) * 10)    #To make sure no aliasing occurs
     physical_spacing = 1.0  # 1 degree, fixed for now. tf version lgn model need this to keep true cpd;
-    row_range = tf.cast(tf.linspace(0.0, row_size, tf.cast(row_size, tf.int32)), dtype=dtype)
-    col_range = tf.cast(tf.linspace(0.0, col_size, tf.cast(col_size, tf.int32)), dtype=dtype)
+    row_range = tf.cast(tf.linspace(0.0, row_size, tf.cast(row_size / physical_spacing, tf.int32)), dtype=dtype)
+    col_range = tf.cast(tf.linspace(0.0, col_size, tf.cast(col_size / physical_spacing, tf.int32)), dtype=dtype)
     # number_frames_needed = int(round(frame_rate * t_max))
     number_frames_needed = tf.cast(tf.math.round(frame_rate * t_max), tf.int32)
     time_range = tf.cast(tf.linspace(0.0, t_max, number_frames_needed), dtype=dtype)
     tt, yy, xx = tf.meshgrid(time_range, row_range, col_range, indexing='ij')
 
-    # theta_rad = tf.constant(np.pi * (180 - theta) / 180.0, dtype=dtype) #Add negative here to match brain observatory angles!
-    # phase_rad = tf.constant(np.pi * (180 - phase) / 180.0, dtype=dtype)
     theta_rad = pi * (180 - theta) / 180  # Convert to radians
     phase_rad = pi * (180 - phase) / 180  # Convert to radians
 
@@ -56,18 +64,10 @@ def make_drifting_grating_stimulus(row_size=120, col_size=240, moving_flag=True,
     else:
         return tf.tile(data[0][tf.newaxis, ...], (image_duration, 1, 1))
 
-@tf.function(jit_compile=True)
-def movies_concat(movie, pre_delay, post_delay, dtype=tf.float32):       
-    # add an gray screen period before and after the movie
-    z1 = tf.zeros((pre_delay, movie.shape[1], movie.shape[2], movie.shape[3]), dtype=dtype)
-    z2 = tf.zeros((post_delay, movie.shape[1], movie.shape[2], movie.shape[3]), dtype=dtype)
-    videos = tf.concat((z1, movie, z2), 0)
-    return videos
-
 def generate_drifting_grating_tuning(orientation=None, temporal_f=2, cpd=0.04, contrast=0.8, 
                                      row_size=120, col_size=240,
                                      seq_len=600, pre_delay=50, post_delay=50,
-                                     current_input=False, regular=False, n_input=17400,
+                                     current_input=False, regular=False, n_input=17400, dt=1,
                                      bmtk_compat=True, return_firing_rates=False, rotation='cw', billeh_phase=False,
                                      dtype=tf.float32):
     """ make a drifting gratings stimulus for FR and OSI tuning."""
@@ -90,7 +90,6 @@ def generate_drifting_grating_tuning(orientation=None, temporal_f=2, cpd=0.04, c
             else:
                 theta = orientation
 
-            # theta = tf.cast(theta, dtype)
             if rotation == "cw":
                 mov_theta = theta
             if rotation == "ccw":
@@ -104,7 +103,8 @@ def generate_drifting_grating_tuning(orientation=None, temporal_f=2, cpd=0.04, c
             # phase = np.random.uniform(0, 360)
             # mov_theta = tf.constant(mov_theta, dtype=dtype)
 
-            movie = make_drifting_grating_stimulus(moving_flag=True, image_duration=duration, cpd=cpd, temporal_f=temporal_f, theta=mov_theta, 
+            movie = make_drifting_grating_stimulus(row_size=row_size, col_size=col_size, moving_flag=True, 
+                                                   image_duration=duration, cpd=cpd, temporal_f=temporal_f, theta=mov_theta, 
                                                    phase=phase, contrast=contrast, dtype=dtype)
             movie = tf.expand_dims(movie, axis=-1)
             # Add an empty gray screen period before and after the movie
@@ -132,33 +132,289 @@ def generate_drifting_grating_tuning(orientation=None, temporal_f=2, cpd=0.04, c
                     _z = tf.random.uniform(tf.shape(_p), dtype=dtype) < _p
                 del _p
 
-                yield _z, theta, tf.constant(contrast, dtype=dtype, shape=(1,)), tf.constant(duration, dtype=dtype, shape=(1,))
+                # downsample
+                # _z = tf.gather(_z, tf.range(0,tf.shape(_z)[0],dt), axis=0)
+
+                yield _z, tf.constant(theta, dtype=dtype, shape=(1,)), tf.constant(contrast, dtype=dtype, shape=(1,)), tf.constant(duration, dtype=dtype, shape=(1,))
                 # yield _z, np.array([theta], dtype=np.float32)
 
     if return_firing_rates:
          output_dtypes = (dtype)
          output_shapes = (tf.TensorShape((seq_len, n_input)))
-         data_set = tf.data.Dataset.from_generator(_g, output_dtypes, output_shapes=output_shapes).map(lambda _a: (tf.cast(_a, dtype)))
+         data_set = tf.data.Dataset.from_generator(_g, output_dtypes, output_shapes=output_shapes).map(lambda _a: (tf.cast(_a, dtype)), num_parallel_calls=tf.data.AUTOTUNE)
     else:
-        output_dtypes = (tf.bool, dtype, dtype, dtype)
+        if current_input:
+            data_dtype = dtype
+        else:
+            data_dtype = tf.bool
+
+        output_dtypes = (data_dtype, dtype, dtype, dtype)
         # when using generator for dataset, it should not contain the batch dim
         output_shapes = (tf.TensorShape((seq_len, n_input)), tf.TensorShape((1)), tf.TensorShape((1)), tf.TensorShape((1)))
         data_set = tf.data.Dataset.from_generator(_g, output_dtypes, output_shapes=output_shapes).map(lambda _a, _b, _c, _d:
-                    (tf.cast(_a, tf.bool), tf.cast(_b, dtype), tf.cast(_c, dtype), tf.cast(_d, dtype)))
+                    (tf.cast(_a, data_dtype), tf.cast(_b, dtype), tf.cast(_c, dtype), tf.cast(_d, dtype)), num_parallel_calls=tf.data.AUTOTUNE)
 
     return data_set
 
+### GABOR PATCHES STIMULUS GENERATION ###
+# @tf.function(jit_compile=True)
+def circle_heatmap(x0, y0, row_size=120, col_size=240, r=10):
+    # Create a blank heatmap
+    heatmap = tf.zeros((row_size, col_size), dtype=tf.float32)
+    grid_x = tf.cast(tf.range(r, col_size, r), dtype=tf.float32)
+    grid_y = tf.cast(tf.range(r, row_size, r), dtype=tf.float32)
+    # Select center coordinates
+    x0 = tf.gather(grid_x, x0)
+    y0 = tf.gather(grid_y, y0)
+    # Create a grid of x and y coordinates for the entire heatmap
+    x_coords = tf.range(col_size, dtype=tf.float32)
+    y_coords = tf.range(row_size, dtype=tf.float32)
+    x_grid, y_grid = tf.meshgrid(x_coords, y_coords)
+    # Calculate squared distances to the center
+    distance_squared = (x_grid - x0) ** 2 + (y_grid - y0) ** 2
+    # Create a circular heatmap by setting values within radius to 1
+    # Adjust radius
+    r = tf.cast(r - tf.sqrt(0.5), tf.float32)  # Adjust to make the circle of radius `r` pixels
+    heatmap = tf.where(distance_squared <= r ** 2, 1.0, heatmap)
 
+    return heatmap
+
+# @tf.function(jit_compile=True)	
+def inverse_circle_heatmap_tf(x0, y0, row_size=120, col_size=240, r=10):
+    # Create a heatmap filled with ones
+    heatmap = tf.ones((row_size, col_size), dtype=tf.float32)
+    # Define grid coordinates
+    # grid_x = tf.linspace(30.0, 210.0, 13)  # 13 points
+    # grid_y = tf.linspace(10.0, 110.0, 11)  # 11 points
+    grid_x = tf.cast(tf.range(r, col_size, r), dtype=tf.float32)
+    grid_y = tf.cast(tf.range(r, row_size, r), dtype=tf.float32)
+    # Select center coordinates
+    x0 = tf.gather(grid_x, x0)
+    y0 = tf.gather(grid_y, y0)
+    # Create a grid of x and y coordinates for the entire heatmap
+    x_coords = tf.range(col_size, dtype=tf.float32)
+    y_coords = tf.range(row_size, dtype=tf.float32)
+    x_grid, y_grid = tf.meshgrid(x_coords, y_coords)
+    # Calculate squared distances to the center
+    distance_squared = (x_grid - x0) ** 2 + (y_grid - y0) ** 2
+    # Create an inverse circular heatmap by setting values within radius to 0
+    # Adjust radius
+    r = tf.cast(r - tf.sqrt(0.5), tf.float32)  # Adjust to make the circle of radius `r` pixels
+    heatmap = tf.where(distance_squared <= r ** 2, 0.0, heatmap)
+
+    return heatmap
+
+@tf.function(jit_compile=True)
+def create_gabor_mask(x0, y0, seq_len, row_size=120, col_size=240, r = 10, inverse = False, dtype=tf.float32):
+    """
+    Create a 3D mask from a circle heatmap.
+
+    Args:
+        x0 (int): The index of the x-coordinate of the center of the circle
+        y0 (int): The index of y-coordinate of the center of the circle.
+        seq_len (int): The length of the sequence.
+        r (int): The radius of the circle.
+
+    Returns:
+        tf.Tensor: The 3D mask.
+    """
+    if inverse:
+        mask = inverse_circle_heatmap(x0, y0, row_size=row_size, col_size=col_size, r=r)
+    else:
+        mask = circle_heatmap(x0, y0, row_size=row_size, col_size=col_size, r=r)
+
+    mask_3d = tf.tile(mask[None, :, :], [seq_len, 1, 1])
+    mask_3d = tf.cast(mask_3d, dtype=dtype)
+    
+    return mask_3d
+
+# @tf.function(jit_compile=True) # Sometimes this function is called with different phase, causing 
+def make_moving_gabors_stimulus(row_size=120, col_size=240, moving_flag=True, image_duration=100, cpd=0.04,
+                                temporal_f=2, theta=0, phase=0, contrast=1.0, 
+                                x0=0, y0=0, r=10, inverse=False, dtype=tf.float32):
+    """
+    Generates a gabor patches grating stimulus.
+
+    Args:
+        row_size (int): Number of rows in the stimulus.
+        col_size (int): Number of columns in the stimulus.
+        moving_flag (bool): Flag indicating whether the gratings drift or are static.
+        image_duration (int): Duration of the stimulus in milliseconds.
+        cpd (float): Cycles per degree of the grating.
+        temporal_f (float): Temporal frequency of the grating.
+        theta (float): Orientation angle of the grating in degrees. If None, a random angle is chosen.
+        phase (float): Phase of the grating in degrees.
+        contrast (float): Contrast of the grating.
+
+    Returns:
+        tf.Tensor: The generated drifting grating stimulus.
+    """
+    frame_rate = 1000  # Hz
+    t_max = tf.cast(image_duration, tf.float32) / 1000
+    pi = tf.constant(np.pi, dtype=dtype)
+
+    physical_spacing = 1.0  # 1 degree, fixed for now. tf version lgn model need this to keep true cpd;
+    row_range = tf.cast(tf.linspace(0.0, row_size, tf.cast(row_size / physical_spacing, tf.int32)), dtype=dtype)
+    col_range = tf.cast(tf.linspace(0.0, col_size, tf.cast(col_size / physical_spacing, tf.int32)), dtype=dtype)
+    # number_frames_needed = int(round(frame_rate * t_max))
+    number_frames_needed = tf.cast(tf.math.round(frame_rate * t_max), tf.int32)
+    time_range = tf.cast(tf.linspace(0.0, t_max, number_frames_needed), dtype=dtype)
+    tt, yy, xx = tf.meshgrid(time_range, row_range, col_range, indexing='ij')
+
+    theta_rad = pi * (180 - theta) / 180
+    phase_rad = pi * (180 - phase) / 180
+
+    xy = xx * tf.cos(theta_rad) + yy * tf.sin(theta_rad)
+    data = contrast * tf.sin(2 * pi * (cpd * xy + temporal_f * tt) + phase_rad)
+
+    # create a gabor filter at grey background -----------------------------------------------
+    mask_3d = create_gabor_mask(x0, y0, image_duration, row_size=row_size, col_size=col_size, 
+                                r=r, inverse=inverse, dtype=dtype) # returns the mask as a tensor
+    # Apply the mask to the data
+    masked_data = data * mask_3d # 0 is the grey background
+    
+    if moving_flag: # decide whether the gratings drift or they are static 
+        return masked_data
+    else:
+        return tf.tile(masked_data[0][tf.newaxis, ...], (image_duration, 1, 1))
+
+def generate_gabor_patches_tuning(orientation=None, temporal_f=2, cpd=0.04, contrast=0.8,
+                                row_size=120, col_size=240,
+                                seq_len=600, pre_delay=50, post_delay=50,
+                                current_input=False, regular=False, n_input=17400, dt=1,
+                                bmtk_compat=True, moving_flag=True, x0=0, y0=0, r=10, inverse=False,
+                                return_firing_rates=False,
+                                rotation='cw', billeh_phase=False, dtype=tf.float32):
+    """
+    Generate a dataset of Gabor patches for receptive field calculation.
+
+    This function creates a dataset of Gabor patch stimuli with various parameters,
+    processes them through an LGN model, and yields the resulting spike probabilities or currents.
+
+    Args:
+        phase (float, optional): Phase of the Gabor patch in degrees. If None, randomly generated.
+        orientation (float, optional): Orientation of the Gabor patch in degrees. If None, randomly generated.
+        temporal_f (float): Temporal frequency of the Gabor patch. Default is 2.
+        cpd (float): Cycles per degree of the Gabor patch. Default is 0.04.
+        contrast (float): Contrast of the Gabor patch. Default is 0.8.
+        row_size (int): Number of rows in the stimulus. Default is 120.
+        col_size (int): Number of columns in the stimulus. Default is 240.
+        seq_len (int): Total length of the sequence in milliseconds. Default is 600.
+        pre_delay (int): Delay before stimulus onset in milliseconds. Default is 50.
+        post_delay (int): Delay after stimulus offset in milliseconds. Default is 50.
+        current_input (bool): If True, return current input instead of spike probabilities. Default is False.
+        regular (bool): If True, use regular orientation increments. Default is False.
+        n_input (int): Number of input neurons. Default is 17400.
+        bmtk_compat (bool): Flag for BMTK compatibility. Default is True.
+        moving_flag (bool): If True, generate moving Gabor patches. Default is True.
+        x0 (int): X-coordinate of the Gabor patch center. Default is 0.
+        y0 (int): Y-coordinate of the Gabor patch center. Default is 0.
+        r (int): Radius of the Gabor patch. Default is 10.
+        inverse (bool): If True, generate inverse Gabor patches. Default is False.
+        rotation (str): Direction of rotation, either 'cw' or 'ccw'. Default is 'cw'.
+        billeh_phase (bool): If True, add 180 degrees to the orientation. Default is False.
+        dtype (tf.DType): Data type for TensorFlow operations. Default is tf.float32.
+
+    Returns:
+        tf.data.Dataset: A dataset that yields tuples of (spikes, orientation, contrast, duration),
+                         where spikes is a boolean tensor of shape (seq_len, n_input),
+                         and the other elements are scalar values.
+    """
+
+    lgn = lgn_module.LGN(row_size=row_size, col_size=col_size, n_input=n_input, dtype=dtype)
+
+    # seq_len = pre_delay + duration + post_delay
+    duration =  seq_len - pre_delay - post_delay
+
+    def _g():
+        if regular:
+            theta = -45  # to make the first one 0
+        while True:
+            if orientation is None:
+                # generate randomly.
+                if regular:
+                    theta = (theta + 45) % 180
+                else:
+                    theta = tf.random.uniform(shape=(1,), minval=0, maxval=360, dtype=dtype)
+            else:
+                theta = orientation
+
+            if rotation == "cw":
+                mov_theta = theta
+            if rotation == "ccw":
+                mov_theta = -theta # flip the sign
+
+            if billeh_phase:
+                mov_theta += 180
+
+            phase = tf.random.uniform(shape=(1,), minval=0, maxval=360, dtype=dtype)
+
+            movie = make_moving_gabors_stimulus(row_size=row_size, col_size=col_size, image_duration=duration, 
+                                                cpd=cpd, temporal_f=temporal_f, theta=mov_theta, phase=phase, contrast=contrast, 
+                                                moving_flag=moving_flag, x0=x0, y0=y0, r=r, inverse=inverse, dtype=dtype)
+            movie = tf.expand_dims(movie, axis=-1)
+            # Add an empty gray screen period before and after the movie
+            videos = movies_concat(movie, pre_delay, post_delay, dtype=dtype)
+            del movie
+            # process spatial filters
+            spatial = lgn.spatial_response(videos, bmtk_compat)
+            del videos
+            # process temporal filters and get firing rates
+            firing_rates = lgn.firing_rates_from_spatial(*spatial)
+            if return_firing_rates:
+                # yield tf.constant(firing_rates, dtype=dtype, shape=(seq_len, n_input))
+                yield firing_rates
+            else:
+                del spatial
+                # sample rate
+                # assuming dt = 1 ms
+                _p = 1 - tf.exp(-firing_rates / 1000.) # probability of having a spike before dt = 1 ms
+                del firing_rates
+                # _z = tf.cast(fixed_noise < _p, dtype)
+                if current_input:
+                    _z = _p * 1.3
+                else:
+                    _z = tf.random.uniform(tf.shape(_p), dtype=dtype) < _p
+                del _p
+
+                # downsample
+                # _z = tf.gather(_z, tf.range(0,tf.shape(_z)[0],dt), axis=0)
+
+                yield _z, tf.constant(theta, dtype=dtype, shape=(1,)), tf.constant(contrast, dtype=dtype, shape=(1,)), tf.constant(duration, dtype=dtype, shape=(1,))
+                # yield _z, np.array([theta], dtype=np.float32)
+
+    if return_firing_rates:	
+        output_dtypes = (dtype)
+        output_shapes = (tf.TensorShape((seq_len, n_input)))
+        data_set = tf.data.Dataset.from_generator(_g, output_dtypes, output_shapes=output_shapes).map(lambda _a: (tf.cast(_a, dtype)), num_parallel_calls=tf.data.AUTOTUNE)
+    else:
+        if current_input:
+            data_dtype = dtype
+        else:
+            data_dtype = tf.bool
+
+        output_dtypes = (data_dtype, dtype, dtype, dtype)
+        # when using generator for dataset, it should not contain the batch dim
+        output_shapes = (tf.TensorShape((seq_len, n_input)), tf.TensorShape((1)), tf.TensorShape((1)), tf.TensorShape((1)))
+        data_set = tf.data.Dataset.from_generator(_g, output_dtypes, output_shapes=output_shapes).map(lambda _a, _b, _c, _d:
+                    (tf.cast(_a, data_dtype), tf.cast(_b, dtype), tf.cast(_c, dtype), tf.cast(_d, dtype)), num_parallel_calls=tf.data.AUTOTUNE)
+
+    return data_set
+
+### CLASSIFICATION STIMULUS GENERATION ###
 @tf.function
 def preprocess_lgn_image(image, contrast, im_slice):
-    # Resize and normalize the image
-    img = tf.image.resize_with_pad(image, 120, 240, method='lanczos5')
+    # Resize the image to fit in V1 receptive field and normalize the image
+    # img = tf.image.resize_with_pad(image, 120, 240, method='lanczos5')
+    ww = 72
+    img = tf.image.resize_with_pad(image, ww, ww, method='lanczos5')
+    img = tf.image.pad_to_bounding_box(img, int((120-ww)/2),int((240-ww)/2), 120, 240)
     img = tf.tile(tf.expand_dims(img, axis=0), (im_slice, 1, 1, 1))  # Replicate for im_slice frames
     return (img - 0.5) * contrast / 0.5  # Normalize to [-contrast, contrast]
 
-def generate_pure_classification_data_set_from_generator(data_usage=0, contrast=1, im_slice=100, pre_delay=50, post_delay=50,
+def generate_pure_classification_data_set_from_generator(data_usage=0, contrast=1, im_slice=100, pre_delay=50, post_delay=150,
                                                          pre_chunks=2, resp_chunks=1, post_chunks=1, n_input=17400, current_input=False,
-                                                         dataset='mnist', std=0, path=None, imagenet_img_num=60000, rot90=False,
+                                                         dataset='mnist', std=0, path=None, imagenet_img_num=60000, rot90=False, dt=1,
                                                          from_lgn=True, bmtk_compat=True, dtype=tf.float32):
     # data_usage: 0, train; 1, test
     if dataset.lower() == 'cifar100':
@@ -225,19 +481,19 @@ def generate_pure_classification_data_set_from_generator(data_usage=0, contrast=
 
             # add an empty period before a period of real image for continuing classification
             videos = movies_concat(img, pre_delay, post_delay, dtype=dtype)
-            # del img
+            del img
 
             if from_lgn:
                 spatial = lgn.spatial_response(videos, bmtk_compat)
-                # del videos
+                del videos
                 firing_rates = lgn.firing_rates_from_spatial(*spatial)
-                # del spatial
+                del spatial
             else:
                 firing_rates = tf.reshape(videos, [-1,n_input])
             # sample rate
             # assuming dt = 1 ms
             _p = 1 - tf.exp(-firing_rates / 1000.)
-            # del firing_rates
+            del firing_rates
             if current_input:
                 _z = _p * 1.3
                 if not from_lgn:
@@ -248,22 +504,25 @@ def generate_pure_classification_data_set_from_generator(data_usage=0, contrast=
             else:
                 _z = tf.random.uniform(tf.shape(_p)) < _p
 
+            # downsample
+            # _z = tf.gather(_z, tf.range(0,tf.shape(_z)[0],dt), axis=0)
             label = tf.concat([tf.zeros(pre_chunks)] + [labels[ind]*tf.ones(resp_chunks)] + [tf.zeros(post_chunks)],axis=0)
             weight = tf.concat([tf.zeros(pre_chunks)] + [tf.ones(resp_chunks)] + [tf.zeros(post_chunks)],axis=0)
             # for plotting, label the image when it holds on
             image_labels = tf.concat([tf.zeros(int(pre_delay/chunk_size))] + [labels[ind]*tf.ones(int(im_slice/chunk_size))] + [tf.zeros(int(post_delay/chunk_size))],axis=0)
             yield _z, label, image_labels, weight
 
-    output_dtypes = (tf.bool, tf.int32, tf.int32, dtype)
+    if current_input:
+        data_dtype = dtype
+    else:
+        data_dtype = tf.bool
+
+    output_dtypes = (data_dtype, tf.int32, tf.int32, dtype)
     # when using generator for dataset, it should not contain the batch dim
-    output_shapes = (tf.TensorShape((seq_len, n_input)), tf.TensorShape((n_chunks)), tf.TensorShape((n_chunks)), tf.TensorShape((n_chunks)))
+    output_shapes = (tf.TensorShape((int(seq_len/dt), n_input)), tf.TensorShape((n_chunks)), tf.TensorShape((n_chunks)), tf.TensorShape((n_chunks)))
     data_set = tf.data.Dataset.from_generator(_g, output_dtypes, output_shapes=output_shapes).map(lambda _a, _b, _c, _d:
-                (tf.cast(_a, tf.bool), tf.cast(_b, tf.int32), tf.cast(_c, tf.int32), tf.cast(_d, dtype)))
-    
-    # Create the dataset using optimized map and prefetch calls
-    data_set = data_set.map(lambda _z, label, image_labels, weight: (_z, label, image_labels, weight), num_parallel_calls=tf.data.AUTOTUNE).prefetch(tf.data.AUTOTUNE)
-
-
+                (tf.cast(_a, data_dtype), tf.cast(_b, tf.int32), tf.cast(_c, tf.int32), tf.cast(_d, dtype)), num_parallel_calls=tf.data.AUTOTUNE)
+        
     return data_set
 
 

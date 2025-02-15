@@ -77,3 +77,27 @@ Time_to_first_spike_0924/Data
 receptive_field_0924/Data_connected
 receptive_field_0924/Data_disconnected
 
+.cache_lgn/spontaneous_lgn_firing_rates_n_input_17400_seqlen_200.pkl
+.cache_lgn/osi_dsi_lgn_firing_rates.pkl
+
+lgn_model/.cache_lgn
+animations
+x_rates.pkl
+x_v1_lm_spikes.pkl
+x.pkl
+garrett_firing_rates.pkl
+receptive_field_javi
+accumulated_predictions_lm_TD_False_2.pkl
+accumulated_predictions_lm_TD_False_3.pkl
+accumulated_predictions_lm_TD_False.pkl
+accumulated_predictions_lm_TD_True_2.pkl
+accumulated_predictions_lm_TD_True_3.pkl
+accumulated_predictions_lm_TD_True.pkl
+receptive_field_0924/rf_analysis_new.ipynb
+receptive_field_0924/size_tunning_analysis copy.ipynb
+receptive_field_0924/size_tunning_analysis.ipynb
+size_tuning_analysis/size_tunning_analysis.ipynb
+size_tuning_analysis/Data/Simulation stats
+size_tuning_analysis/Data/simulation_data
+size_tuning_analysis/Raster_plots/Rasterplot_0.png
+receptive_field_0924/rf_analysis_new.ipynb

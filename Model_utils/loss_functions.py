@@ -124,11 +124,10 @@ class L2Regularizer(tf.keras.regularizers.Regularizer):
         super().__init__()
         self._strength = strength
         self._dtype = dtype
-        self._penalize_relative_change = penalize_relative_change
-        # Compute voltage scale
-        voltage_scale = (network['node_params']['V_th'] - network['node_params']['E_L']).astype(np.float32)
-
+        
         if penalize_relative_change:
+            # Compute voltage scale
+            voltage_scale = (network['node_params']['V_th'] - network['node_params']['E_L']).astype(np.float32)
             # Get the initial weights and properly scale them down
             if recurrent_weights:
                 indices = network["synapses"]["indices"]
@@ -275,7 +274,7 @@ class SpikeRateDistributionTarget:
     """ Instead of regularization, treat it as a target.
         The main difference is that this class will calculate the loss
         for each subtypes of the neurons."""
-    def __init__(self, network, spontaneous_fr=False, rate_cost=.5, pre_delay=None, post_delay=None, data_dir='GLIF_network', area='v1', 
+    def __init__(self, network, spontaneous_fr=False, natural_images=False, rate_cost=.5, pre_delay=None, post_delay=None, data_dir='GLIF_network', area='v1', 
                 core_mask=None, rates_dampening=1.0, seed=42, dtype=tf.float32):
         self._network = network
         self._rate_cost = rate_cost
@@ -289,8 +288,14 @@ class SpikeRateDistributionTarget:
         self._data_dir = data_dir
         self._dtype = dtype
         self._seed = seed
+        # Check that only one option is selected
+        if (spontaneous_fr and natural_images):
+            raise ValueError("Only one of 'spontaneous_fr' or 'natural_images' can be selected at a time.")
+
         if spontaneous_fr:
             self.neuropixels_feature = 'firing_rate_sp'
+        elif natural_images:
+            self.neuropixels_feature = 'firing_rate_ns'
         else:
             self.neuropixels_feature = 'Ave_Rate(Hz)'
         self._target_rates = self.get_neuropixels_firing_rates()
@@ -306,7 +311,7 @@ class SpikeRateDistributionTarget:
         neuropixels_data_path = f'Neuropixels_data/{self._area}_OSI_DSI_DF.csv'
         if not os.path.exists(neuropixels_data_path):
             process_neuropixels_data(area=self._area, path=neuropixels_data_path)
-        features_to_load = ['ecephys_unit_id', 'cell_type', 'firing_rate_sp', 'Ave_Rate(Hz)']
+        features_to_load = ['ecephys_unit_id', 'cell_type', 'firing_rate_ns', 'firing_rate_sp', 'Ave_Rate(Hz)']
         np_df = pd.read_csv(neuropixels_data_path, index_col=0, sep=" ", usecols=features_to_load).dropna(how='all')
         area_node_types = pd.read_csv(os.path.join(self._data_dir, f'network/{self._area}_node_types.csv'), sep=" ")
 
@@ -357,7 +362,7 @@ class SpikeRateDistributionTarget:
             
             type_n_neurons = len(neuron_ids)
             # target_firing_rates[key]['neuron_ids'] = tf.convert_to_tensor(neuron_ids, dtype=tf.int32)
-            target_firing_rates[key]['neuron_ids'] = neuron_ids #tf.convert_to_tensor(neuron_ids, dtype=tf.int32)
+            target_firing_rates[key]['neuron_ids'] = tf.convert_to_tensor(neuron_ids, dtype=tf.int32) #tf.convert_to_tensor(neuron_ids, dtype=tf.int32)
             sorted_target_rates = self._rates_dampening * sample_firing_rates(value["rates"], type_n_neurons, self._seed)
             target_firing_rates[key]['sorted_target_rates'] = tf.convert_to_tensor(sorted_target_rates, dtype=self._dtype)
             # target_firing_rates[key]['tuning_angles'] = tf.cast(tf.gather(self._network['tuning_angle'], neuron_ids), dtype=self._dtype)
@@ -366,8 +371,8 @@ class SpikeRateDistributionTarget:
 
     def __call__(self, spikes, trim=True):
         spikes = spike_trimming(spikes, pre_delay=self._pre_delay, post_delay=self._post_delay, trim=trim)
-
         rates = tf.reduce_mean(spikes, (0, 1)) # calculate the mean firing rate over time and batch
+        
         reg_loss = compute_spike_rate_target_loss(rates, self._target_rates, dtype=self._dtype) 
 
         return reg_loss * self._rate_cost
@@ -447,31 +452,59 @@ class SynchronizationLoss(Layer):
         self.epsilon = 1e-7  # Small constant to avoid division by zero
 
         # Load the experimental data
-        experimental_data_path = os.path.join(data_dir, f'Fano_factor_{self._area}', f'{self._area}_fano_running_300ms_{session}.npy')
+        duration = str(int((t_end - t_start) * 1000))
+        experimental_data_path = os.path.join(data_dir, f'Fano_factor_{self._area}', f'{self._area}_fano_running_{duration}ms_{session}.npy')
+        assert os.path.exists(experimental_data_path), f'File not found: {experimental_data_path}'
         experimental_fanos = np.load(experimental_data_path, allow_pickle=True)
         # Calculate mean, standard deviation, and SEM of the Fano factors
         experimental_fanos_mean = np.nanmean(experimental_fanos[:, bin_sizes_mask], axis=0)
         self.experimental_fanos_mean = tf.constant(experimental_fanos_mean, dtype=self._dtype)
 
+    # def pop_fano_tf(self, spikes, bin_sizes):
+    #     # transpose the spikes tensor to have the shape (seq_len, samples)
+    #     all_spikes_transposed = tf.transpose(spikes)
+    #     # Initialize the Fano factors tensor
+    #     fanos = tf.TensorArray(dtype=self._dtype, size=len(bin_sizes))
+    #     for i, bin_width in enumerate(bin_sizes):
+    #         # drop the last entry to avoid last bin smaller size effect
+    #         bin_size = int(np.round(bin_width * 1000))
+    #         max_index = all_spikes_transposed.shape[0] // bin_size * bin_size
+    #         trimmed_spikes = all_spikes_transposed[:max_index, :]
+    #         # Reshape the spikes tensor 
+    #         trimmed_spikes = tf.reshape(trimmed_spikes, [max_index // bin_size, bin_size, -1])
+    #         # Calculate the number of spikes in each bin
+    #         sp_counts = tf.reduce_sum(trimmed_spikes, axis=1)
+    #         # Calculate the mean and variance of spike counts
+    #         mean_count = tf.reduce_mean(sp_counts, axis=0)
+    #         mean_count = tf.maximum(mean_count, self.epsilon)
+    #         var_count = tf.math.reduce_variance(sp_counts, axis=0)
+    #         fano = var_count / mean_count
+    #         fanos = fanos.write(i, fano)
+
+    #     return fanos.stack()
+
     def pop_fano_tf(self, spikes, bin_sizes):
         # transpose the spikes tensor to have the shape (seq_len, samples)
-        all_spikes_transposed = tf.transpose(spikes)
+        spikes = tf.expand_dims(tf.expand_dims(spikes, axis=-1), axis=-1)
         # Initialize the Fano factors tensor
         fanos = tf.TensorArray(dtype=self._dtype, size=len(bin_sizes))
         for i, bin_width in enumerate(bin_sizes):
-            # drop the last entry to avoid last bin smaller size effect
-            bin_size = int(np.round(bin_width * 1000))
-            max_index = all_spikes_transposed.shape[0] // bin_size * bin_size
-            trimmed_spikes = all_spikes_transposed[:max_index, :]
-            # Reshape the spikes tensor 
-            trimmed_spikes = tf.reshape(trimmed_spikes, [max_index // bin_size, bin_size, -1])
-            # Calculate the number of spikes in each bin
-            sp_counts = tf.reduce_sum(trimmed_spikes, axis=1)
-            # Calculate the mean and variance of spike counts
-            mean_count = tf.reduce_mean(sp_counts, axis=0)
+            bin_size = int(np.round(bin_width * 1000))            
+            # Filter with shape [bin_size, 1, 1, 1]
+            kernel = tf.ones((bin_size, 1, 1, 1), dtype=self._dtype)
+                
+            convolved = tf.nn.conv2d(
+                spikes,
+                kernel,
+                strides=[1, bin_size, 1, 1],
+                padding="VALID"
+            )
+            sp_counts = tf.squeeze(convolved, axis=[2, 3])  # => [n_samples, new_height]
+            mean_count = tf.reduce_mean(sp_counts, axis=1)  # => [n_samples]
+            var_count = tf.math.reduce_variance(sp_counts, axis=1)  # => [n_samples]
             mean_count = tf.maximum(mean_count, self.epsilon)
-            var_count = tf.math.reduce_variance(sp_counts, axis=0)
-            fano = var_count / mean_count
+            fano_per_sample = var_count / mean_count  # => [n_samples]
+            fano = tf.reduce_mean(fano_per_sample)
             fanos = fanos.write(i, fano)
 
         return fanos.stack()
@@ -496,6 +529,7 @@ class SynchronizationLoss(Layer):
         spikes = tf.cast(spikes, self._dtype)  
         # choose random trials to sample from (usually we only have 1 trial to sample from)
         n_trials = tf.shape(spikes)[0]
+        # increase the base seed to avoid the same random neurons to be selected in every instantiation of the class
         self._base_seed = self._base_seed + 1
         sample_trials = tf.random.uniform([self._n_samples], minval=0, maxval=n_trials, dtype=tf.int32, seed=self._base_seed)
         # Generate sample counts with a normal distribution
@@ -518,7 +552,8 @@ class SynchronizationLoss(Layer):
             ## sample_ids = tf.random.shuffle(self.node_id_e)[:sample_num]
             ## randomly choose sample_num ids from shuffled_ids without replacement
             if previous_id + sample_num > tf.size(shuffled_e_ids):
-                shuffled_e_ids = tf.random.shuffle(self.node_id_e, seed=self._base_seed)
+                # shuffled_e_ids = tf.random.shuffle(self.node_id_e, seed=self._base_seed)
+                shuffled_e_ids = tf.random.shuffle(shuffled_e_ids, seed=self._base_seed)
                 previous_id = tf.constant(0, dtype=tf.int32)
             sample_ids = shuffled_e_ids[previous_id:previous_id+sample_num]
             previous_id += sample_num
@@ -527,13 +562,11 @@ class SynchronizationLoss(Layer):
             selected_spikes_sample = selected_spikes_sample.write(i, selected_spikes)
 
         selected_spikes_sample = selected_spikes_sample.stack()
-        fanos = self.pop_fano_tf(selected_spikes_sample, bin_sizes=bin_sizes)
-        # # Calculate mean, standard deviation, and SEM of the Fano factors
-        fanos_mean = tf.reduce_mean(fanos, axis=1)
+        fanos_mean = self.pop_fano_tf(selected_spikes_sample, bin_sizes=bin_sizes)
         # # Calculate MSE between the experimental and calculated Fano factors
         # mse_loss = tf.sqrt(tf.reduce_mean(tf.square(experimental_fanos_mean - fanos_mean)))
-        # mse_loss = tf.reduce_mean(tf.square(experimental_fanos_mean - fanos_mean))
-        mse_loss = tf.reduce_sum(tf.square(experimental_fanos_mean - fanos_mean))
+        mse_loss = tf.reduce_mean(tf.square(experimental_fanos_mean - fanos_mean))
+        # mse_loss = tf.reduce_sum(tf.square(experimental_fanos_mean - fanos_mean))
         # # Calculate the synchronization loss
         sync_loss = self._sync_cost * mse_loss
 
@@ -666,7 +699,7 @@ class VoltageRegularization:
         voltages = (voltages - self._voltage_offset) / self._voltage_scale
         v_pos = tf.square(tf.nn.relu(voltages - 1.0))
         v_neg = tf.square(tf.nn.relu(-voltages + 1.0))
-        voltage_loss = tf.reduce_mean(tf.reduce_mean(v_pos + v_neg, -1)) * self._voltage_cost
+        voltage_loss = tf.reduce_mean(tf.reduce_mean(v_pos + v_neg, -1))
         # voltage_loss = tf.reduce_mean(v_pos + v_neg, axis=[1, 2]) * self._voltage_cost 
 
         # return voltage_loss * self._voltage_cost
@@ -773,16 +806,17 @@ class OrientationSelectivityLoss:
         osi_dsi_df = osi_dsi_df[osi_dsi_df["Ave_Rate(Hz)"] != 0]
         osi_dsi_df.dropna(inplace=True)
         osi_dsi_df["cell_type"] = osi_dsi_df["cell_type"].apply(neuropixels_cell_type_to_cell_type)
-
         osi_target = osi_dsi_df.groupby("cell_type")['OSI'].mean()
         dsi_target = osi_dsi_df.groupby("cell_type")['DSI'].mean()
 
         original_pop_names = other_billeh_utils.pop_names(self._network)
         if self._core_mask is not None:
             original_pop_names = original_pop_names[self.np_core_mask] 
+
         cell_types = np.array([other_billeh_utils.pop_name_to_cell_type(pop_name) for pop_name in original_pop_names])
         node_ids = np.arange(len(cell_types))
         cell_ids = {key: node_ids[cell_types == key] for key in set(osi_dsi_df['cell_type'])}
+        
         osi_dsi_exp_dict = {key: {'OSI': val, 'DSI': dsi_target[key], 'ids': cell_ids[key]} for key, val in osi_target.to_dict().items()}
 
         return osi_dsi_exp_dict
