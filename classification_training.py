@@ -20,7 +20,7 @@ else:
 
 from Model_utils import load_sparse, models, other_billeh_utils, stim_dataset, toolkit
 import Model_utils.loss_functions as losses
-from Model_utils.callbacks import ClassificationCallbacks
+from Model_utils.callbacks import ClassificationCallbacks, printgpu
 
 from time import time
 import ctypes.util
@@ -35,8 +35,6 @@ print("--- TensorFlow version: ", tf.__version__)
 # For CUDA Runtime API
 lib_path = ctypes.util.find_library('cudart')
 print("--- CUDA Library path: ", lib_path)
-
-debug = False
 
 def main(_):
     # Allow for memory growth (also to observe memory consumption)
@@ -117,7 +115,13 @@ def main(_):
     strategy = tf.distribute.MirroredStrategy()
     # strategy = tf.distribute.MirroredStrategy(cross_device_ops=tf.distribute.ReductionToOneDevice(reduce_to_device="cpu:0"))
 
-    per_replica_batch_size = flags.batch_size
+    if flags.test_only:
+        per_replica_batch_size = 20
+        val_steps = 2 # int(10000 / per_replica_batch_size)
+    else:
+        per_replica_batch_size = flags.batch_size
+        val_steps = flags.val_steps
+
     global_batch_size = per_replica_batch_size * strategy.num_replicas_in_sync
     print(f'Per replica batch size: {per_replica_batch_size}')
     print(f'Global batch size: {global_batch_size}\n')
@@ -193,9 +197,9 @@ def main(_):
           
         # Build the optimizer
         optimizer.build(model.trainable_variables)
-        #Enable loss scaling for training float16 model
-        if flags.dtype == 'float16':
-            optimizer = mixed_precision.LossScaleOptimizer(optimizer) # to prevent suffering from underflow gradients when using tf.float16  
+        # #Enable loss scaling for training float16 model
+        # if flags.dtype == 'float16':
+        #     optimizer = mixed_precision.LossScaleOptimizer(optimizer) # to prevent suffering from underflow gradients when using tf.float16  
 
         # Option to resume the training from a checkpoint from a previous training session
         if flags.restore_from != '' and os.path.exists(flags.restore_from):
@@ -215,9 +219,23 @@ def main(_):
                 checkpoint.restore(checkpoint_directory).expect_partial()#.assert_consumed()
                 optimizer.build(model.trainable_variables)
             else:
-                # Restore the model
-                checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
-                checkpoint.restore(checkpoint_directory).assert_consumed()
+                try:
+                    # Restore the model
+                    checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
+                    checkpoint.restore(checkpoint_directory).assert_consumed()
+                except:
+                    print("Failed to restore the optimizer. Starting from scratch...")
+                    if flags.optimizer == 'adam':
+                        optimizer = tf.keras.optimizers.Adam(flags.learning_rate, epsilon=1e-11)  
+                    elif flags.optimizer == 'sgd':
+                        optimizer = tf.keras.optimizers.SGD(flags.learning_rate, momentum=0.0, nesterov=False)
+                    else:
+                        print(f"Invalid optimizer: {flags.optimizer}")
+                        raise ValueError
+                    # Restore the model
+                    checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
+                    checkpoint.restore(checkpoint_directory).expect_partial()#.assert_consumed()
+                    optimizer.build(model.trainable_variables)
 
         # Restore model and optimizer from an intermediate checkpoint if it exists
         elif flags.ckpt_dir != '' and os.path.exists(os.path.join(flags.ckpt_dir, "Intermediate_checkpoints")):
@@ -243,6 +261,10 @@ def main(_):
         else:
             print(f"No checkpoint found in {flags.ckpt_dir} or {flags.restore_from}. Starting from scratch...\n")
             checkpoint = None
+
+        #Enable loss scaling for training float16 model
+        if flags.dtype == 'float16':
+            optimizer = mixed_precision.LossScaleOptimizer(optimizer) # to prevent suffering from underflow gradients when using tf.float16  
 
         model_variables_dict['Best'] =  {var.name: var.numpy().astype(np.float16) for var in model.trainable_variables}
         print(f"Model variables stored in dictionary\n")
@@ -278,10 +300,10 @@ def main(_):
         # model.add_loss(lambda: lm_v1_regularizer(rsnn_layer.cell.lm.interarea_weight_values['v1']))
 
         ### SPONTANEOUS RATES REGULARIZERS ###
-        v1_evoked_rate_regularizer = losses.SpikeRateDistributionTarget(networks['v1'], spontaneous_fr=True, rate_cost=flags.rate_cost, pre_delay=0, post_delay=0, 
+        v1_evoked_rate_regularizer = losses.SpikeRateDistributionTarget(networks['v1'], natural_images=True, rate_cost=flags.rate_cost, pre_delay=0, post_delay=0, 
                                                                             data_dir=flags.data_dir, area='v1', core_mask=None, seed=flags.seed, dtype=tf.float32)
         model.add_loss(lambda: v1_evoked_rate_regularizer(rsnn_layer.output[0][0]))
-        lm_evoked_rate_regularizer = losses.SpikeRateDistributionTarget(networks['lm'], spontaneous_fr=True, rate_cost=flags.rate_cost, pre_delay=0, post_delay=0, 
+        lm_evoked_rate_regularizer = losses.SpikeRateDistributionTarget(networks['lm'], natural_images=True, rate_cost=flags.rate_cost, pre_delay=0, post_delay=0, 
                                                                             data_dir=flags.data_dir, area='lm', core_mask=None, seed=flags.seed, dtype=tf.float32)
         model.add_loss(lambda: lm_evoked_rate_regularizer(rsnn_layer.output[0][2]))
 
@@ -396,7 +418,19 @@ def main(_):
         _initial_state = _state_variables
         seq_len = tf.shape(_x)[1]
         dummy_zeros = tf.zeros((per_replica_batch_size, seq_len, n_total_neurons), dtype)
-        _out, _p = extractor_model((_x, dummy_zeros, _initial_state))
+
+        if flags.gradient_checkpointing:
+            @tf.recompute_grad
+            def roll_out_with_gradient_checkpointing(x, state_vars):
+                # Call extractor model without storing intermediate state variables
+                dummy_zeros = tf.zeros((per_replica_batch_size, seq_len, n_total_neurons), dtype)
+                _out, _p = extractor_model((x, dummy_zeros, state_vars))
+                return _out, _p
+            _out, _p = roll_out_with_gradient_checkpointing(_x, _initial_state)
+        else:
+            _out, _p = extractor_model((_x, dummy_zeros, _initial_state))
+
+        # _out, _p = extractor_model((_x, dummy_zeros, _initial_state))
         _v1_z, _v1_v, _lm_z, _lm_v = _out[0]
 
         if flags.dtype != 'float32':
@@ -428,7 +462,7 @@ def main(_):
             regularizers_loss = v1_recurrent_stiff_regularizer + lm_recurrent_stiff_regularizer #+ v1_lm_weights_l2_regularizer + lm_v1_weights_l2_regularizer
             # regularizers_loss = tf.constant(0., tf.float32)
             
-            classification_loss = compute_loss(_y, _p, _w)
+            classification_loss = 10*compute_loss(_y, _p, _w)
             # Scale the losses since the optimizer will aggregate the gradients across replicas automatically before applying them
             _loss = tf.nn.scale_regularization_loss(rate_loss + voltage_loss + regularizers_loss) + classification_loss
             
@@ -440,7 +474,7 @@ def main(_):
     def train_step(_x, _y, _w, state_variables):
         ### Forward propagation of the model
         with tf.GradientTape() as tape:
-            _out, _p, _loss, _aux = roll_out(_x, _y, _w, state_variables)
+            _out, _p, _loss, _aux = roll_out(tf.cast(_x, dtype), _y, _w, state_variables)
             # Scale the loss for float16         
             if flags.dtype=='float16':
                 _scaled_loss = optimizer.get_scaled_loss(_loss)
@@ -520,7 +554,7 @@ def main(_):
 
         if output_spikes:
             _v1_z, _lm_z = _out[0][0], _out[0][2]
-            return _v1_z, _lm_z        
+            return _v1_z, _lm_z   
 
     @tf.function
     def distributed_validation_step(x, y, weights, state_variables, output_spikes=True):
@@ -537,7 +571,7 @@ def main(_):
             n_examples = 10000 if is_test else 60000 #int(50000/64)
 
             _data_set = (stim_dataset.generate_pure_classification_data_set_from_generator(
-                data_usage=int(is_test), contrast=1, im_slice=100,
+                data_usage=int(is_test), contrast=1, im_slice=100, std=flags.mnist_noise_std,
                 pre_delay=delays[0], post_delay=delays[1], current_input=flags.current_input, n_input=flags.n_input,
                 dataset='mnist', pre_chunks=3, resp_chunks=1, post_chunks=0, from_lgn=True,
                 )
@@ -575,20 +609,35 @@ def main(_):
         # Run generate_gray_state on each replica
         return strategy.run(generate_gray_state, args=(spontaneous_prob,))
     
+    def process_output_spikes(v1_spikes, networks, seq_len=200, down_sample=50, n_output=10, area='v1'):
+        outputs_10 = []
+        for i in range(n_output):
+            t_output = tf.gather(v1_spikes, networks[area][f'readout_neuron_ids_{i}'], axis=2)
+            t_output = tf.cast(t_output, tf.float32)
+            t_output = tf.reduce_mean(t_output, -1)
+            outputs_10.append(t_output)
+        output = tf.concat(outputs_10, axis=-1)
+
+        mean_output = tf.reshape(output, (-1, int(seq_len / down_sample), down_sample, n_output)) # TensorShape([None, 4, 50, 10])
+        mean_output = tf.reduce_mean(mean_output, axis=2) # TensorShape([None, 4, 10])
+        # mean_output = mean_output[:, -1, :]
+        
+        return mean_output
+
     ############################ TRAINING #############################
     stop = False
     # Initialize your callbacks
     metric_keys = ['train_accuracy', 'train_loss', 'train_firing_rate', 'train_rate_loss', 'train_voltage_loss', 'train_regularizer_loss', 'train_classification_loss',
                    'val_accuracy', 'val_loss', 'val_firing_rate', 'val_rate_loss', 'val_voltage_loss', 'val_regularizer_loss', 'val_classification_loss']
 
-    callbacks = ClassificationCallbacks(networks, model, optimizer, flags, logdir, strategy, metric_keys, 
+    callbacks = ClassificationCallbacks(networks, lgn_inputs, bkg_inputs, model, optimizer, flags, logdir, strategy, metric_keys, 
                                         pre_delay=delays[0], post_delay=delays[1], model_variables_init=model_variables_dict,
                                         checkpoint=checkpoint)
 
     callbacks.on_train_begin()
     n_prev_epochs = flags.run_session * flags.n_epochs
 
-    ############################ TESTING #############################
+    ############################ ONLY TESTING #############################
     if flags.test_only:
         print(f'Testing...')
         callbacks.on_epoch_start()  
@@ -597,14 +646,53 @@ def main(_):
         # Load the dataset iterator
         test_it = iter(test_data_set)
         val_t0 = time()  
-        for step in range(flags.val_steps): # total samples = batch_size * val_steps
+        # accumulated_p_v1 = []
+        # accumulated_p_lm = []
+        accumulated_p = []
+        accumulated_y = []
+        for step in range(val_steps): # total samples = batch_size * val_steps
+            t0 = time()
             # Generate LGN spikes
             x, y, _, w = next(test_it)
             v1_spikes, lm_spikes = distributed_validation_step(x, y, w, gray_state, output_spikes=True)
+            ### Process the output spikes
+            mean_output = process_output_spikes(v1_spikes, networks, seq_len=flags.seq_len, down_sample=10, 
+                                                n_output=flags.n_output, area='v1')
+            
+            # mean_output_v1 = tf.reduce_sum(v1_spikes[:, -50:, :], axis=1)
+            # mean_output_lm = tf.reduce_sum(lm_spikes[:, -50:, :], axis=1)
+
+            accumulated_y.append(y[:, -1])
+            accumulated_p.append(mean_output.numpy().astype(np.float16))
+
+            # accumulated_p_v1.append(mean_output_v1.numpy().astype(np.float16))
+            # accumulated_p_lm.append(mean_output_lm.numpy().astype(np.float16))
+
+            print(f'Step {step}/{val_steps} running time: {time() - t0:.2f}s\n')
+            for gpu_id in range(len(strategy.extended.worker_devices)):
+                printgpu(gpu_id=gpu_id)
+
+        # Convert accumulated lists to numpy arrays if needed
+        # accumulated_p_v1 = np.array(accumulated_p_v1)
+        # accumulated_p_lm = np.array(accumulated_p_lm)
+        accumulated_y = np.array(accumulated_y)
+        accumulated_p = np.array(accumulated_p)
+        # save the accumulated predictions and labels
+        # with open(f'{logdir}/accumulated_predictions.pkl', 'wb') as f:
+        #     pkl.dump({'predictions': accumulated_p, 'labels': accumulated_y}, f)
+        with open(f'accumulated_predictions_lm_TD_{flags.connected_areas}_2.pkl', 'wb') as f:
+            pkl.dump({'predictions': accumulated_p, 'labels': accumulated_y}, f)
+            # pkl.dump({'v1_spikes': accumulated_p_v1, 'lm_spikes': accumulated_p_lm, 'labels': accumulated_y}, f)
+            
         print(f'\nValidation running time: {time() - val_t0:.2f}s')
 
         val_values = [a.result().numpy() for a in [val_accuracy, val_loss, val_firing_rate, val_rate_loss,
                                                     val_voltage_loss, val_regularizer_loss, val_classification_loss]]
+        
+        # save the validation results in a dict in a pickle file
+        os.makedirs(os.path.join(logdir, 'Noise_analysis'), exist_ok=True)
+        with open(f'{logdir}/Noise_analysis/validation_results_std_{flags.mnist_noise_std}.pkl', 'wb') as f:
+            pkl.dump({'validation_results': val_values}, f)
         
         metric_values = val_values + val_values
         # select only the values for the last replica in case there are multiple replicas
@@ -614,9 +702,10 @@ def main(_):
             lm_spikes = strategy.experimental_local_results(lm_spikes)[-1]
             y = strategy.experimental_local_results(y)[-1]
 
-        # # save pkl file with x[0], v1_spikes[0], lm_spikes[0], y[0]
-        # with open('x_v1_lm_spikes.pkl', 'wb') as f:
-        #     pkl.dump({'x': x[0], 'v1_spikes': v1_spikes[0], 'lm_spikes': lm_spikes[0], 'y': y[0]}, f)
+        # save pkl file with x[0], v1_spikes[0], lm_spikes[0], y[0]
+        with open('x_v1_lm_spikes.pkl', 'wb') as f:
+            pkl.dump({'x': x[0], 'v1_spikes': v1_spikes[0], 'lm_spikes': lm_spikes[0], 'y': y[0]}, f)
+        
         callbacks.on_testing_end(x, v1_spikes, lm_spikes, y, metric_values, verbose=True)    
         # Reset the metrics for the next epoch
         reset_validation_metrics()
@@ -725,7 +814,7 @@ def main(_):
             ## VALIDATION AFTER EACH EPOCH          
             gray_state = distributed_generate_gray_state(spontaneous_prob)
             val_t0 = time()  
-            for step in range(flags.val_steps): # total samples = batch_size * val_steps
+            for step in range(val_steps): # total samples = batch_size * val_steps
                 # Generate LGN spikes
                 x, y, _, w = next(test_it)
                 v1_spikes, lm_spikes = distributed_validation_step(x, y, w, gray_state, output_spikes=True)
@@ -770,15 +859,15 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_string('data_dir', _data_dir, '')
     absl.app.flags.DEFINE_string('results_dir', _results_dir, '')
     absl.app.flags.DEFINE_string('restore_from', '', '')
+    absl.app.flags.DEFINE_string('ckpt_dir', '', '')
     absl.app.flags.DEFINE_string('comment', '', '')
     absl.app.flags.DEFINE_string('interarea_weight_distribution', 'billeh_weights', '')
     # absl.app.flags.DEFINE_string('interarea_weight_distribution', 'zero_weights', '')
-    absl.app.flags.DEFINE_string('delays', '100,0', '')
+    absl.app.flags.DEFINE_string('delays', '50,50', '')
     absl.app.flags.DEFINE_string('optimizer', 'adam', '')
     absl.app.flags.DEFINE_string('dtype', 'float32', '')
     absl.app.flags.DEFINE_string('osi_loss_method', 'crowd_osi', '')
     absl.app.flags.DEFINE_string("rotation", "ccw", "")
-    absl.app.flags.DEFINE_string('ckpt_dir', '', '')
 
     absl.app.flags.DEFINE_float('learning_rate', .001, '')
     absl.app.flags.DEFINE_float('rate_cost', 100., '')
@@ -797,6 +886,7 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_float('E4_weight_factor', 1., '')
     absl.app.flags.DEFINE_float('temporal_f', 2., '')
     absl.app.flags.DEFINE_float('max_time', -1, '')
+    absl.app.flags.DEFINE_float('mnist_noise_std', 0, '')
 
     absl.app.flags.DEFINE_integer('n_runs', 1, '')
     absl.app.flags.DEFINE_integer('run_session', 0, '')
@@ -830,7 +920,7 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_boolean('disconnect_lm_L6_inhibition', False, '')
     absl.app.flags.DEFINE_boolean('disconnect_v1_lm_L6_excitatory_projections', False, '')
     absl.app.flags.DEFINE_boolean('random_weights', False, '')
-    absl.app.flags.DEFINE_boolean('realistic_neurons_ratio', True, '')
+    absl.app.flags.DEFINE_boolean('realistic_neurons_ratio', False, '')
     absl.app.flags.DEFINE_boolean('train_recurrent_v1', False, '')
     absl.app.flags.DEFINE_boolean('train_recurrent_lm', False, '')
     absl.app.flags.DEFINE_boolean('train_input', False, '')
@@ -852,5 +942,6 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_boolean("connected_areas", True, "")
     absl.app.flags.DEFINE_boolean("connected_recurrent_connections", True, "")
     absl.app.flags.DEFINE_boolean("connected_noise", True, "")
+    absl.app.flags.DEFINE_boolean("gradient_checkpointing", True, "")
 
     absl.app.run(main)

@@ -45,6 +45,7 @@ parser.add_argument('--input_f0', default=0.2, type=float)
 parser.add_argument('--E4_weight_factor', default=1.0, type=float)
 parser.add_argument('--temporal_f', default=2.0, type=float)
 parser.add_argument('--max_time', default=-1, type=float)
+parser.add_argument('--mnist_noise_std', default=0., type=float)
 
 parser.add_argument('--n_gpus', default=1, type=int)
 parser.add_argument('--n_runs', default=1, type=int) # number of runs with n_epochs each, with an osi/dsi evaluation after each
@@ -102,7 +103,8 @@ parser.add_argument('--connected_recurrent_connections', dest='connected_recurre
 parser.add_argument('--no-connected_recurrent_connections', dest='connected_recurrent_connections', action='store_false')
 parser.add_argument('--connected_noise', dest='connected_noise', action='store_true', default=True)
 parser.add_argument('--no-connected_noise', dest='connected_noise', action='store_false')
-
+parser.add_argument('--gradient_checkpointing', default=True, action='store_true')
+parser.add_argument('--nogradient_checkpointing', dest='gradient_checkpointing', action='store_false')
 
 
 def submit_job(command):
@@ -152,19 +154,26 @@ def main():
     if flags.restore_from == '':
         sim_name = toolkit.get_random_identifier('b_')
         logdir = os.path.join(results_dir, sim_name)
-        logdir += '_mnist'
+        logdir += '_mnist' #'_mnist_only_TD'
         initial_benchmark_model = ''
     else:
         sim_name = os.path.basename(os.path.dirname(flags.restore_from))
         logdir = os.path.dirname(flags.restore_from) 
         initial_benchmark_model = flags.restore_from
+        if 'mnist' in logdir:
+            counter = 1
+            while os.path.exists(logdir + f'_{counter}'):
+                counter += 1
+            logdir = logdir + f'_{counter}'
+        else:
+            logdir += '_mnist' #'_mnist_only_TD'
 
     # logdir = '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Simulation_results/v1_100000_lm_30000/b_jshp_mnist/Best_model'
     # sim_name = 'b_jshp_mnist'
     print(f'> Results for {flags.task_name} will be stored in:\n {logdir} \n')
 
     # # Define the job submission commands for the training and evaluation scripts
-    training_commands = ["run", "-g", f"{flags.n_gpus}", "-G", "L40S", "-c", f"{4 * flags.n_gpus}", "-m", "80", "-t", "36:00"] # L40S choose the particular gpu model for training with 48 GB of memory
+    training_commands = ["run", "-g", f"{flags.n_gpus}", "-G", "L40S", "-c", f"{4 * flags.n_gpus}", "-m", "80", "-t", "48:00"] # L40S choose the particular gpu model for training with 48 GB of memory
     # training_commands = ["run", "-g", f"{flags.n_gpus}", "-G", "L40S", "-c", f"{4 * flags.n_gpus}", "-m", "80", "-t", "36:00"] # L40S choose the particular gpu model for training with 48 GB of memory
     evaluation_commands = ["run", "-g", "1", "-m", "48", "-c", "4", "-t", "1:00"]
 
@@ -215,32 +224,32 @@ def main():
             job_id = submit_job(new_training_command)
         job_ids.append(job_id)
 
-    # Final evaluation with the best model
-    n_samples = 10000
-    val_steps = int(n_samples / 24)
-    final_evaluation_command = evaluation_commands + ["-o", f"Out/{sim_name}_{v1_neurons}_test_final.out", "-e", f"Error/{sim_name}_{v1_neurons}_test_final.err", "-j", f"{sim_name}_test_final"]
-    final_evaluation_script = evaluation_script + f"--test_only --batch_size 24 --val_steps {val_steps} --ckpt_dir {logdir} --restore_from {os.path.join(logdir, 'Best_model')}"
-    final_evaluation_command = final_evaluation_command + [final_evaluation_script]
-    eval_job_id = submit_job(final_evaluation_command)
-    eval_job_ids.append(eval_job_id)
+    # # Final evaluation with the best model
+    # n_samples = 10000
+    # # val_steps = int(n_samples / 24)
+    # final_evaluation_command = evaluation_commands + ['-d', job_ids[i-1], "-o", f"Out/{sim_name}_{v1_neurons}_test_final.out", "-e", f"Error/{sim_name}_{v1_neurons}_test_final.err", "-j", f"{sim_name}_test_final"]
+    # final_evaluation_script = evaluation_script + f"--test_only --batch_size 24 --val_steps {flags.val_steps} --ckpt_dir {logdir} --restore_from 'Best_model' "
+    # final_evaluation_command = final_evaluation_command + [final_evaluation_script]
+    # eval_job_id = submit_job(final_evaluation_command)
+    # eval_job_ids.append(eval_job_id)
 
-    final_evaluation_command = evaluation_commands + ["-o", f"Out/{sim_name}_{v1_neurons}_test_final.out", "-e", f"Error/{sim_name}_{v1_neurons}_test_final.err", "-j", f"{sim_name}_test_final"]
-    final_evaluation_script = evaluation_script + f"--no-connected_areas --test_only --batch_size 24 --val_steps {val_steps} --ckpt_dir {logdir} --restore_from {os.path.join(logdir, 'Best_model')}"
-    final_evaluation_command = final_evaluation_command + [final_evaluation_script]
-    eval_job_id = submit_job(final_evaluation_command)
-    eval_job_ids.append(eval_job_id)
+    # final_evaluation_command = evaluation_commands + ["-o", f"Out/{sim_name}_{v1_neurons}_test_final.out", "-e", f"Error/{sim_name}_{v1_neurons}_test_final.err", "-j", f"{sim_name}_test_final"]
+    # final_evaluation_script = evaluation_script + f"--no-connected_areas --test_only --batch_size 24 --val_steps {val_steps} --ckpt_dir {logdir} --restore_from {os.path.join(logdir, 'Best_model')}"
+    # final_evaluation_command = final_evaluation_command + [final_evaluation_script]
+    # eval_job_id = submit_job(final_evaluation_command)
+    # eval_job_ids.append(eval_job_id)
 
-    final_evaluation_command = evaluation_commands + ["-o", f"Out/{sim_name}_{v1_neurons}_test_final.out", "-e", f"Error/{sim_name}_{v1_neurons}_test_final.err", "-j", f"{sim_name}_test_final"]
-    final_evaluation_script = evaluation_script + f"--no-connected_noise --test_only --batch_size 24 --val_steps {val_steps} --ckpt_dir {logdir} --restore_from {os.path.join(logdir, 'Best_model')}"
-    final_evaluation_command = final_evaluation_command + [final_evaluation_script]
-    eval_job_id = submit_job(final_evaluation_command)
-    eval_job_ids.append(eval_job_id)
+    # final_evaluation_command = evaluation_commands + ["-o", f"Out/{sim_name}_{v1_neurons}_test_final.out", "-e", f"Error/{sim_name}_{v1_neurons}_test_final.err", "-j", f"{sim_name}_test_final"]
+    # final_evaluation_script = evaluation_script + f"--no-connected_noise --test_only --batch_size 24 --val_steps {val_steps} --ckpt_dir {logdir} --restore_from {os.path.join(logdir, 'Best_model')}"
+    # final_evaluation_command = final_evaluation_command + [final_evaluation_script]
+    # eval_job_id = submit_job(final_evaluation_command)
+    # eval_job_ids.append(eval_job_id)
 
-    final_evaluation_command = evaluation_commands + ["-o", f"Out/{sim_name}_{v1_neurons}_test_final.out", "-e", f"Error/{sim_name}_{v1_neurons}_test_final.err", "-j", f"{sim_name}_test_final"]
-    final_evaluation_script = evaluation_script + f"--no-connected_recurrent_connections --test_only --batch_size 24 --val_steps {val_steps} --ckpt_dir {logdir} --restore_from {os.path.join(logdir, 'Best_model')}"
-    final_evaluation_command = final_evaluation_command + [final_evaluation_script]
-    eval_job_id = submit_job(final_evaluation_command)
-    eval_job_ids.append(eval_job_id)
+    # final_evaluation_command = evaluation_commands + ["-o", f"Out/{sim_name}_{v1_neurons}_test_final.out", "-e", f"Error/{sim_name}_{v1_neurons}_test_final.err", "-j", f"{sim_name}_test_final"]
+    # final_evaluation_script = evaluation_script + f"--no-connected_recurrent_connections --test_only --batch_size 24 --val_steps {val_steps} --ckpt_dir {logdir} --restore_from {os.path.join(logdir, 'Best_model')}"
+    # final_evaluation_command = final_evaluation_command + [final_evaluation_script]
+    # eval_job_id = submit_job(final_evaluation_command)
+    # eval_job_ids.append(eval_job_id)
 
     
     print("Submitted training jobs with the following JOBIDs:", job_ids)
