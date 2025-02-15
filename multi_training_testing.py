@@ -33,8 +33,8 @@ parser.add_argument('--osi_cost', default=1., type=float)
 parser.add_argument('--osi_loss_subtraction_ratio', default=0., type=float)
 parser.add_argument('--osi_loss_method', default='crowd_osi', type=str)
 
-parser.add_argument('--dampening_factor', default=0.5, type=float)
-parser.add_argument('--recurrent_dampening_factor', default=0.5, type=float)
+parser.add_argument('--dampening_factor', default=0.1, type=float)
+parser.add_argument('--recurrent_dampening_factor', default=0.1, type=float)
 parser.add_argument('--input_weight_scale', default=1.0, type=float)
 parser.add_argument('--gauss_std', default=0.3, type=float)
 parser.add_argument('--recurrent_weight_regularization', default=0.0, type=float)
@@ -64,6 +64,8 @@ parser.add_argument('--examples_in_epoch', default=32, type=int)
 parser.add_argument('--validation_examples', default=16, type=int)
 parser.add_argument('--seed', default=3000, type=int)
 parser.add_argument('--neurons_per_output', default=16, type=int)
+parser.add_argument('--n_output', default=10, type=int)
+parser.add_argument('--fano_samples', default=500, type=int)
 
 # parser.add_argument('--float16', default=False, action='store_true')
 parser.add_argument('--caching', default=True, action='store_true')
@@ -83,14 +85,18 @@ parser.add_argument('--train_interarea_v1_lm', default=False, action='store_true
 parser.add_argument('--train_noise', default=False, action='store_true')
 
 parser.add_argument('--connected_selection', default=True, action='store_true')
-parser.add_argument('--neuron_output', default=True, action='store_true')
+parser.add_argument('--neuron_output', default=False, action='store_true')
 
 parser.add_argument('--visualize_test', default=False, action='store_true')
 parser.add_argument('--pseudo_gauss', default=False, action='store_true')
+parser.add_argument('--current_input', default=False, action='store_true')
 parser.add_argument('--bmtk_compat_lgn', default=True, action='store_true')
 parser.add_argument('--reset_every_step', default=False, action='store_true')
 parser.add_argument('--spontaneous_training', default=False, action='store_true')
 parser.add_argument('--spontaneous_uniform_distribution_constraint', default=False, action='store_true')
+parser.add_argument('--gradient_checkpointing', default=True, action='store_true')
+parser.add_argument('--nogradient_checkpointing', dest='gradient_checkpointing', action='store_false')
+
 parser.add_argument('--rotation', default='ccw', type=str)
 
 
@@ -154,8 +160,10 @@ def main():
     # Define the job submission commands for the training and evaluation scripts
     # training_commands = ["run", "-g", "1", "-m", "24", "-t", "1:15"]
     # evaluation_commands = ["run", "-g", "1", "-m", "65", "-t", "0:45"]
-    training_commands = ["run", "-g", f"{flags.n_gpus}", "-G", "L40S", "-c", f"{4 * flags.n_gpus}", "-m", "200", "-t", "24:00"] # L40S choose the particular gpu model for training with 48 GB of memory
-    evaluation_commands = ["run", "-g", "1", "-m", "60", "-c", "4", "-t", "2:00"]
+
+    training_commands = ["run", "-g", f"{flags.n_gpus}", "-c", f"{4 * flags.n_gpus}", "-m", "60", "-t", "24:00"] 
+    # training_commands = ["run", "-g", f"{flags.n_gpus}", "-G", "L40S", "-c", f"{4 * flags.n_gpus}", "-m", "60", "-t", "24:00"] # L40S choose the particular gpu model for training with 48 GB of memory
+    evaluation_commands = ["run", "-g", "1", "-m", "80", "-c", "4", "-t", "2:00"]
 
     # Define the training and evaluation script calls
     training_script = "python multi_training_single_gpu_split.py " 

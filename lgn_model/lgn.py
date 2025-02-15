@@ -447,8 +447,8 @@ class LGN(object):
             self.is_composite = tf.constant(is_composite, dtype=dtype)
             self.spontaneous_firing_rates = tf.constant(spontaneous_firing_rates, dtype=dtype)
 
-            self.dom_temporal_kernels = tf.constant(dom_temporal_kernels, dtype=dtype)
-            self.non_dom_temporal_kernels = tf.constant(non_dom_temporal_kernels, dtype=dtype)
+            self.dom_temporal_kernels = tf.cast(dom_temporal_kernels, dtype=dtype)
+            self.non_dom_temporal_kernels = tf.cast(non_dom_temporal_kernels, dtype=dtype)
             # self.gaussian_filters = gaussian_filters
             self.gaussian_filters = [tf.cast(gf, dtype=dtype) for gf in gaussian_filters]
             self.spatial_range_indices = spatial_range_indices
@@ -464,8 +464,8 @@ class LGN(object):
             self.is_composite = tf.constant(is_composite[:n_input], dtype=dtype)
             self.spontaneous_firing_rates = tf.constant(spontaneous_firing_rates[:n_input], dtype=dtype)
 
-            self.dom_temporal_kernels = tf.constant(dom_temporal_kernels[:, :n_input], dtype=dtype)
-            self.non_dom_temporal_kernels = tf.constant(non_dom_temporal_kernels[:, :n_input], dtype=dtype)
+            self.dom_temporal_kernels = tf.cast(dom_temporal_kernels[:, :n_input], dtype=dtype)
+            self.non_dom_temporal_kernels = tf.cast(non_dom_temporal_kernels[:, :n_input], dtype=dtype)
             self.gaussian_filters = [tf.cast(gf, dtype=dtype) for gf in gaussian_filters]
             self.spatial_range_indices = spatial_range_indices
             self.sorted_neuron_ids_indices = sorted_neuron_ids_indices

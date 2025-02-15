@@ -139,20 +139,20 @@ def isolate_neurons(network, neuron_population='e23', data_dir='GLIF_network'):
     return selected_mask
 
 
-def firing_rates_smoothing(z, sampling_rate=60, window_size=100):  # window_size=300
+def firing_rates_smoothing(z, sampling_rate=60, window_size=100):
     n_simulations, simulation_length, n_neurons = z.shape
-    sampling_interval = int(1000/sampling_rate)  # ms
-    window_size = int(np.round(window_size/sampling_interval))
-    # z = z.reshape(n_simulations, simulation_length, z.shape[1])
-    z_chunks = [z[:, x:x+sampling_interval, :]
-                for x in range(0, simulation_length, sampling_interval)]
-    # (simulation_length, n_simulations, n_neurons)
-    sampled_firing_rates = np.array(
-        [np.sum(group, axis=1) * sampling_rate for group in z_chunks])
+    sampling_interval = int(1000 / sampling_rate)  # Convert sampling rate in Hz to interval in ms
+    window_size = int(np.round(window_size / sampling_interval))  # Convert window size to number of samples
+    # Chunk the data into segments of length sampling_interval
+    z_chunks = [z[:, x:x + sampling_interval, :] for x in range(0, simulation_length, sampling_interval)]
+    # Calculate the instantaneous firing rates for each chunk
+    sampled_firing_rates = np.array([np.sum(group, axis=1) * sampling_rate for group in z_chunks])
+    # Smooth the firing rates using a Gaussian filter
     smoothed_fr = gaussian_filter1d(sampled_firing_rates, window_size, axis=0)
+    # Swap axes to return to the original shape
     smoothed_fr = np.swapaxes(smoothed_fr, 0, 1)
-    return smoothed_fr, sampling_interval
 
+    return smoothed_fr, sampling_interval
 
 def voltage_spike_effect_correction(v, z, pre_spike_gap=2, post_spike_gap=3):
     n_simulations, simulation_length, n_neurons = v.shape
@@ -327,7 +327,7 @@ def load_simulation_results_hdf5(full_data_path, n_trials=None, skip_first_simul
 
 
 class SaveGaborSimDataHDF5:
-    def __init__(self, flags, data_path, networks, n_rows=1, n_cols=1, n_directions=4, save_core_only=True):
+    def __init__(self, flags, data_path, networks, initial_row=0, final_row=1, initial_col=0, final_col=1, save_core_only=True):
         self.v1_neurons = networks['v1']['n_nodes']
         self.lm_neurons = networks['lm']['n_nodes']
         self.v1_core_neurons = 51978
@@ -357,9 +357,9 @@ class SaveGaborSimDataHDF5:
 
         # row_ids = [flags.circle_row] #np.arange(0, n_rows)
         # col_ids = [flags.circle_column] #np.arange(0, n_cols)
-        row_ids = np.arange(0, n_rows)
-        col_ids = np.arange(0, n_cols)
-        r = flags.radius_circle
+        row_ids = np.arange(initial_row, final_row)
+        col_ids = np.arange(initial_col, final_col)
+        # r = flags.radius_circle
         # directions = np.arange(0, 180, 45)
 
         # filename = 'simulation_data_row_{}_col_{}_r{}.hdf5'.format(row_ids[0], col_ids[0], r)
@@ -386,7 +386,7 @@ class SaveGaborSimDataHDF5:
         filename = 'simulation_data.hdf5'
         file_path = os.path.join(self.data_path, filename)
         lock_path = file_path + '.lock'  # Lock file
-
+        
         # Use file locking to ensure safe access in multi-threaded environments
         with FileLock(lock_path):
             with h5py.File(file_path, 'a') as f:

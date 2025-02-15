@@ -81,7 +81,13 @@ def main(_):
         current_epoch = 0
     else:
         flag_str = logdir.split(os.path.sep)[-2]
-        current_epoch = (flags.run_session + 1) * flags.n_epochs
+        # Load current epoch from the file
+        if os.path.exists(os.path.join(logdir, 'train_end_data.pkl')):
+            with open(os.path.join(logdir, 'train_end_data.pkl'), 'rb') as f:
+                data_loaded = pkl.load(f)
+            current_epoch = len(data_loaded['epoch_metric_values']['train_loss'])
+        else:
+            current_epoch = (flags.run_session + 1) * flags.n_epochs
         
     # Can be used to try half precision training
     if flags.dtype=='float16':
@@ -257,7 +263,7 @@ def main(_):
             cache_dir = "lgn_model/.cache_lgn"
             post_delay = flags.seq_len - (2500 % flags.seq_len) if flags.seq_len < 2500 else 0
             osi_seq_len = 2500 + post_delay
-            osi_dataset_path = os.path.join(cache_dir, f"osi_dsi_lgn_probabilities__n_input_{flags.n_input}_seqlen_{osi_seq_len}.pkl")
+            osi_dataset_path = os.path.join(cache_dir, f"osi_dsi_lgn_probabilities_n_input_{flags.n_input}_seqlen_{osi_seq_len}.pkl")
 
             if os.path.exists(osi_dataset_path):
                 # Load cached OSI/DSI LGN firing rates dataset
@@ -463,7 +469,7 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_string('restore_from', 'Intermediate_checkpoints', '')
     absl.app.flags.DEFINE_string('comment', '', '')
     absl.app.flags.DEFINE_string('interarea_weight_distribution', 'billeh_weights', '')
-    absl.app.flags.DEFINE_string('delays', '100,0', '')
+    absl.app.flags.DEFINE_string('delays', '50,0', '')
     absl.app.flags.DEFINE_string('optimizer', 'adam', '')
     absl.app.flags.DEFINE_string('dtype', 'float32', '')
 
@@ -474,15 +480,16 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_float('osi_cost', 1., '')
     absl.app.flags.DEFINE_string('osi_loss_method', 'crowd_osi', '')
     absl.app.flags.DEFINE_float('osi_loss_subtraction_ratio', 1., '')
-    absl.app.flags.DEFINE_float('dampening_factor', .5, '')
-    absl.app.flags.DEFINE_float('recurrent_dampening_factor', .5, '')
+
+    absl.app.flags.DEFINE_float('dampening_factor', .1, '')
+    absl.app.flags.DEFINE_float('recurrent_dampening_factor', .1, '')
     absl.app.flags.DEFINE_float('input_weight_scale', 1., '')
     absl.app.flags.DEFINE_float('gauss_std', .3, '')
     absl.app.flags.DEFINE_float('recurrent_weight_regularization', 0., '')
     absl.app.flags.DEFINE_float('interarea_weight_regularization', 0., '')
     absl.app.flags.DEFINE_float('lr_scale', 1., '')
     absl.app.flags.DEFINE_float('input_f0', 0.2, '')
-    absl.app.flags.DEFINE_float('E4_weight_factor', 1., '')
+    absl.app.flags.DEFINE_float('E4_weight_factor', 4., '')
     absl.app.flags.DEFINE_float('temporal_f', 2., '')
     absl.app.flags.DEFINE_float('max_time', -1, '')
 
@@ -507,6 +514,7 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_integer('neurons_per_output', 16, '')
     absl.app.flags.DEFINE_integer('n_output', 10, '')
     absl.app.flags.DEFINE_integer('n_trials_per_angle', 10, '')
+    absl.app.flags.DEFINE_integer('fano_samples', 500, '')
 
     # absl.app.flags.DEFINE_boolean('float16', False, '')
     absl.app.flags.DEFINE_boolean('caching', True, '')
@@ -525,7 +533,7 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_boolean('train_noise', False, '')
     # absl.app.flags.DEFINE_boolean('train_recurrent_per_type', False, '')
     absl.app.flags.DEFINE_boolean('connected_selection', True, '')
-    absl.app.flags.DEFINE_boolean('neuron_output', True, '')
+    absl.app.flags.DEFINE_boolean('neuron_output', False, '')
     # absl.app.flags.DEFINE_boolean('hard_only', False, '')
     absl.app.flags.DEFINE_boolean('visualize_test', False, '')
     absl.app.flags.DEFINE_boolean('pseudo_gauss', False, '')
@@ -539,6 +547,7 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_boolean("connected_noise", True, "")
     absl.app.flags.DEFINE_boolean("calculate_osi_dsi", True, "")
     absl.app.flags.DEFINE_boolean("current_input", False, "")
+    absl.app.flags.DEFINE_boolean("gradient_checkpointing", True, "")
 
     absl.app.flags.DEFINE_string("rotation", "ccw", "")
 
