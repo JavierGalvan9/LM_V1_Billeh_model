@@ -77,8 +77,7 @@ class StiffRegularizer(Layer):
             edge_type_ids = network['interarea_synapses'][source_area]["edge_type_ids"]
 
         # Scale initial values by the voltage scale of the node IDs
-        voltage_scale_node_ids = voltage_scale[network['node_type_ids'][indices[:, 0]]]
-        initial_value /= voltage_scale_node_ids
+        initial_value /= voltage_scale[network['node_type_ids'][indices[:, 0]]]
 
         if initial_values is not None:
             initial_value = np.copy(initial_values).astype(np.float32)
@@ -240,6 +239,9 @@ def compute_spike_rate_distribution_loss(_rates, target_rate, dtype=tf.float32):
     ind = tf.range(target_rate.shape[0])
     rand_ind = tf.random.shuffle(ind)
     _rates = tf.gather(_rates, rand_ind)
+
+    # _rates = tf.random.shuffle(_rates) # for some reason this shuffling is not enough for the loss to propagate correctly
+
     sorted_rate = tf.sort(_rates)
     u = sorted_rate - target_rate
     tau = (tf.range(target_rate.shape[0]) + 1) / target_rate.shape[0]
@@ -370,6 +372,10 @@ class SpikeRateDistributionTarget:
         return target_firing_rates
 
     def __call__(self, spikes, trim=True):
+
+        # if spikes.dtype != self._dtype:
+        #     spikes = tf.cast(spikes, self._dtype)
+
         spikes = spike_trimming(spikes, pre_delay=self._pre_delay, post_delay=self._post_delay, trim=trim)
         rates = tf.reduce_mean(spikes, (0, 1)) # calculate the mean firing rate over time and batch
         
@@ -484,25 +490,19 @@ class SynchronizationLoss(Layer):
     #     return fanos.stack()
 
     def pop_fano_tf(self, spikes, bin_sizes):
-        # transpose the spikes tensor to have the shape (seq_len, samples)
-        spikes = tf.expand_dims(tf.expand_dims(spikes, axis=-1), axis=-1)
-        # Initialize the Fano factors tensor
+        spikes = tf.expand_dims(spikes, axis=-1)
         fanos = tf.TensorArray(dtype=self._dtype, size=len(bin_sizes))
         for i, bin_width in enumerate(bin_sizes):
-            bin_size = int(np.round(bin_width * 1000))            
-            # Filter with shape [bin_size, 1, 1, 1]
-            kernel = tf.ones((bin_size, 1, 1, 1), dtype=self._dtype)
-                
-            convolved = tf.nn.conv2d(
-                spikes,
-                kernel,
-                strides=[1, bin_size, 1, 1],
-                padding="VALID"
-            )
-            sp_counts = tf.squeeze(convolved, axis=[2, 3])  # => [n_samples, new_height]
-            mean_count = tf.reduce_mean(sp_counts, axis=1)  # => [n_samples]
-            var_count = tf.math.reduce_variance(sp_counts, axis=1)  # => [n_samples]
+            bin_size = int(np.round(bin_width * 1000))
+            # Use convolution for efficient binning
+            kernel = tf.ones((bin_size, 1, 1), dtype=self._dtype)
+            convolved = tf.nn.conv1d(spikes, kernel, stride=bin_size, padding="VALID")
+            sp_counts = tf.squeeze(convolved, axis=-1)  # Shape: (60, new_width)
+            # Compute mean and variance of spike counts
+            mean_count = tf.reduce_mean(sp_counts, axis=1)
+            var_count = tf.math.reduce_variance(sp_counts, axis=1)
             mean_count = tf.maximum(mean_count, self.epsilon)
+            # fanos.append(tf.reduce_mean(var_count / mean_count))
             fano_per_sample = var_count / mean_count  # => [n_samples]
             fano = tf.reduce_mean(fano_per_sample)
             fanos = fanos.write(i, fano)
@@ -511,6 +511,9 @@ class SynchronizationLoss(Layer):
 
     def __call__(self, spikes, trim=True):
 
+        # if spikes.dtype != self._dtype:
+        #     spikes = tf.cast(spikes, self._dtype)
+        
         if self._core_mask is not None:
             spikes = tf.boolean_mask(spikes, self._core_mask, axis=2)
 
@@ -530,15 +533,12 @@ class SynchronizationLoss(Layer):
         # choose random trials to sample from (usually we only have 1 trial to sample from)
         n_trials = tf.shape(spikes)[0]
         # increase the base seed to avoid the same random neurons to be selected in every instantiation of the class
-        self._base_seed = self._base_seed + 1
+        self._base_seed += 1
         sample_trials = tf.random.uniform([self._n_samples], minval=0, maxval=n_trials, dtype=tf.int32, seed=self._base_seed)
         # Generate sample counts with a normal distribution
-        if self._area == 'v1':
-            sample_size = 70
-            sample_std = 30
-        else:
-            sample_size = 33
-            sample_std = 14
+        sample_size = 70 if self._area == 'v1' else 33
+        sample_std = 30 if self._area == 'v1' else 14
+        
         sample_counts = tf.cast(tf.random.normal([self._n_samples], mean=sample_size, stddev=sample_std, seed=self._base_seed), tf.int32)
         sample_counts = tf.clip_by_value(sample_counts, clip_value_min=15, clip_value_max=tf.shape(self.node_id_e)[0]) # lower cap to 15 to avoid small samples
         # Randomize the neuron ids
@@ -697,9 +697,11 @@ class VoltageRegularization:
             voltages = tf.boolean_mask(voltages, self._core_mask, axis=2)
 
         voltages = (voltages - self._voltage_offset) / self._voltage_scale
-        v_pos = tf.square(tf.nn.relu(voltages - 1.0))
-        v_neg = tf.square(tf.nn.relu(-voltages + 1.0))
-        voltage_loss = tf.reduce_mean(tf.reduce_mean(v_pos + v_neg, -1))
+        # v_tot = tf.square(tf.nn.relu(voltages - 1.0) + tf.nn.relu(-voltages + 1.0))
+        # More efficient computation (the loss function tries to keep the voltage close to the threshold)
+        v_tot = tf.square(voltages - 1.0)
+        voltage_loss = tf.reduce_mean(v_tot)
+        # voltage_loss = tf.reduce_mean(tf.reduce_mean(v_tot, -1))
         # voltage_loss = tf.reduce_mean(v_pos + v_neg, axis=[1, 2]) * self._voltage_cost 
 
         # return voltage_loss * self._voltage_cost
@@ -983,6 +985,9 @@ class OrientationSelectivityLoss:
         return total_loss
 
     def __call__(self, spikes, angle, trim, normalizer=None):
+
+        # if spikes.dtype != self._dtype:
+        #     spikes = tf.cast(spikes, self._dtype)
 
         spikes = spike_trimming(spikes, pre_delay=self._pre_delay, post_delay=self._post_delay, trim=trim)
 

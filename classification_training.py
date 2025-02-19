@@ -21,6 +21,7 @@ else:
 from Model_utils import load_sparse, models, other_billeh_utils, stim_dataset, toolkit
 import Model_utils.loss_functions as losses
 from Model_utils.callbacks import ClassificationCallbacks, printgpu
+from Model_utils.optimizers import ExponentiatedAdam
 
 from time import time
 import ctypes.util
@@ -117,7 +118,7 @@ def main(_):
 
     if flags.test_only:
         per_replica_batch_size = 20
-        val_steps = 2 # int(10000 / per_replica_batch_size)
+        val_steps = int(10000 / per_replica_batch_size)
     else:
         per_replica_batch_size = flags.batch_size
         val_steps = flags.val_steps
@@ -188,7 +189,9 @@ def main(_):
         # Define the optimizer
         # optimizer = tf.keras.optimizers.Adam(flags.learning_rate, epsilon=1e-11, clipnorm=0.001)  
         if flags.optimizer == 'adam':
-            optimizer = tf.keras.optimizers.Adam(flags.learning_rate, epsilon=1e-11)  
+            optimizer = tf.keras.optimizers.Adam(flags.learning_rate, epsilon=1e-11)
+        elif flags.optimizer == 'exp_adam':
+            optimizer = ExponentiatedAdam(flags.learning_rate, epsilon=1e-11)
         elif flags.optimizer == 'sgd':
             optimizer = tf.keras.optimizers.SGD(flags.learning_rate, momentum=0.0, nesterov=False)
         else:
@@ -207,8 +210,11 @@ def main(_):
             print(f'Restoring checkpoint from {checkpoint_directory}...')
             optimizer_continuing = other_billeh_utils.optimizers_match(optimizer, checkpoint_directory)            
             if not optimizer_continuing:
+                # Define the optimizer
                 if flags.optimizer == 'adam':
-                    optimizer = tf.keras.optimizers.Adam(flags.learning_rate, epsilon=1e-11)  
+                    optimizer = tf.keras.optimizers.Adam(flags.learning_rate, epsilon=1e-11)
+                elif flags.optimizer == 'exp_adam':
+                    optimizer = ExponentiatedAdam(flags.learning_rate, epsilon=1e-11)
                 elif flags.optimizer == 'sgd':
                     optimizer = tf.keras.optimizers.SGD(flags.learning_rate, momentum=0.0, nesterov=False)
                 else:
@@ -225,8 +231,11 @@ def main(_):
                     checkpoint.restore(checkpoint_directory).assert_consumed()
                 except:
                     print("Failed to restore the optimizer. Starting from scratch...")
+                    # Define the optimizer
                     if flags.optimizer == 'adam':
-                        optimizer = tf.keras.optimizers.Adam(flags.learning_rate, epsilon=1e-11)  
+                        optimizer = tf.keras.optimizers.Adam(flags.learning_rate, epsilon=1e-11)
+                    elif flags.optimizer == 'exp_adam':
+                        optimizer = ExponentiatedAdam(flags.learning_rate, epsilon=1e-11)
                     elif flags.optimizer == 'sgd':
                         optimizer = tf.keras.optimizers.SGD(flags.learning_rate, momentum=0.0, nesterov=False)
                     else:
@@ -687,14 +696,9 @@ def main(_):
         print(f'\nValidation running time: {time() - val_t0:.2f}s')
 
         val_values = [a.result().numpy() for a in [val_accuracy, val_loss, val_firing_rate, val_rate_loss,
-                                                    val_voltage_loss, val_regularizer_loss, val_classification_loss]]
-        
-        # save the validation results in a dict in a pickle file
-        os.makedirs(os.path.join(logdir, 'Noise_analysis'), exist_ok=True)
-        with open(f'{logdir}/Noise_analysis/validation_results_std_{flags.mnist_noise_std}.pkl', 'wb') as f:
-            pkl.dump({'validation_results': val_values}, f)
-        
+                                                    val_voltage_loss, val_regularizer_loss, val_classification_loss]]        
         metric_values = val_values + val_values
+        
         # select only the values for the last replica in case there are multiple replicas
         if strategy.num_replicas_in_sync > 1:
             x = strategy.experimental_local_results(x)[-1]

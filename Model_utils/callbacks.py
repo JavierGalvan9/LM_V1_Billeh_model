@@ -552,10 +552,14 @@ class OsiDsiCallbacks:
         fanos = np.array(fanos)
         return fanos, bin_sizes
         
-    def fanos_figure(self, spikes, area='', n_samples=100, analyze_core_only=True, data_dir='Synchronization_data'):
+    def fanos_figure(self, spikes, area='', n_samples=100, fano_duration=300, analyze_core_only=True, data_dir='Synchronization_data'):
         # Calculate fano factors for both sessions
-        evoked_fanos, evoked_bin_sizes = self.fano_factor(spikes, area=area, t_start=0.7, t_end=2.5, n_samples=n_samples, analyze_core_only=analyze_core_only)
-        spontaneous_fanos, spont_bin_sizes = self.fano_factor(spikes, area=area, t_start=0.2, t_end=0.5, n_samples=n_samples, analyze_core_only=analyze_core_only)
+        fano_duration_seconds = fano_duration / 1000
+        t_start_seconds = self.pre_delay / 1000 + 0.2
+        t_end_seconds = t_start_seconds + fano_duration_seconds
+        # evoked_fanos, evoked_bin_sizes = self.fano_factor(spikes, area=area, t_start=0.7, t_end=2.5, n_samples=n_samples, analyze_core_only=analyze_core_only)
+        evoked_fanos, evoked_bin_sizes = self.fano_factor(spikes, area=area, t_start=t_start_seconds, t_end=t_end_seconds, n_samples=n_samples, analyze_core_only=analyze_core_only)
+        spontaneous_fanos, spont_bin_sizes = self.fano_factor(spikes, area=area, t_start=0.2, t_end=self.pre_delay/1000, n_samples=n_samples, analyze_core_only=analyze_core_only)
 
         # Calculate mean, standard deviation, and SEM of the Fano factors
         evoked_fanos_mean = np.nanmean(evoked_fanos, axis=0)
@@ -569,10 +573,10 @@ class OsiDsiCallbacks:
         evoked_max_fano_freq = 1/(2*evoked_bin_sizes[np.nanargmax(evoked_fanos_mean)])
         spontaneous_max_fano = np.nanmax(spontaneous_fanos_mean)
         spontaneous_max_fano_freq = 1/(2*spont_bin_sizes[np.nanargmax(spontaneous_fanos_mean)])
-         # Load experimental data
-        evoked_exp_data_path = os.path.join(data_dir, f'Fano_factor_{area}', f'{area}_fano_running_1800ms_evoked.npy')
+        # Load experimental data
+        evoked_exp_data_path = os.path.join(data_dir, f'Fano_factor_{area}', f'{area}_fano_running_{fano_duration}ms_evoked.npy')
         evoked_exp_fanos = np.load(evoked_exp_data_path, allow_pickle=True)
-        spont_exp_data_path = os.path.join(data_dir, f'Fano_factor_{area}', f'{area}_fano_running_300ms_spont.npy')
+        spont_exp_data_path = os.path.join(data_dir, f'Fano_factor_{area}', f'{area}_fano_running_{fano_duration}ms_spont.npy')
         spont_exp_fanos = np.load(spont_exp_data_path, allow_pickle=True)
         # Mask experimental data to match bin sizes
         # Assuming experimental data was computed with the same initial bin_sizes array
@@ -892,7 +896,7 @@ class OsiDsiCallbacks:
         # Plot the raster plot
         self.plot_raster(x, v1_spikes, lm_spikes, angle=y)
 
-    def osi_dsi_analysis(self, v1_spikes, lm_spikes, DG_angles):
+    def osi_dsi_analysis(self, v1_spikes, lm_spikes, DG_angles, fano_duration=300):
         # Do the OSI/DSI analysis       
         boxplots_dir = os.path.join(self.images_dir, 'Boxplots_OSI_DSI')
         os.makedirs(boxplots_dir, exist_ok=True)
@@ -908,7 +912,7 @@ class OsiDsiCallbacks:
             # Fano factor analysis
             print('Fano factor analysis for area: ', area)
             t_fano0 = time()
-            self.fanos_figure(spikes, area=area, n_samples=1000, analyze_core_only=True)
+            self.fanos_figure(spikes, area=area, n_samples=1000, fano_duration=fano_duration, analyze_core_only=True)
             print('Fanos figure saved in ', time() - t_fano0, ' seconds!\n')
 
             # print('Fano factor TF analysis for area: ', area)
@@ -1048,6 +1052,14 @@ class ClassificationCallbacks:
         if self.flags.n_runs > 1:
             self.save_intermediate_checkpoint()
 
+        self.model_variables_dict['Best'] = {var.name: var.numpy().astype(np.float16) for var in self.model.trainable_variables}
+        # Analize changes in trainable variables.
+        if self.model_variables_dict is not None:
+            for var in self.model_variables_dict['Best'].keys():
+                t0 = time()
+                self.trainable_variable_change_heatmaps_and_distributions(var)
+                print(f'Time spent in {var}: {time()-t0}')
+
     def on_epoch_start(self):
         self.epoch += 1
         # self.step_counter.assign_add(1)
@@ -1180,13 +1192,6 @@ class ClassificationCallbacks:
         self.classification_rates(x, v1_spikes, lm_spikes, y, images_dir=images_dir)
         self.plot_mean_firing_rate_boxplot(v1_spikes, lm_spikes, y, images_dir=images_dir)
         self.plot_raster(x, v1_spikes, lm_spikes, y, images_dir=images_dir)
-        self.model_variables_dict['Best'] = {var.name: var.numpy().astype(np.float16) for var in self.model.trainable_variables}
-        # Analize changes in trainable variables.
-        if self.model_variables_dict is not None:
-            for var in self.model_variables_dict['Best'].keys():
-                t0 = time()
-                self.trainable_variable_change_heatmaps_and_distributions(var)
-                print(f'Time spent in {var}: {time()-t0}')
 
     def trainable_variable_change_heatmaps_and_distributions(self, variable):
         area = variable.split('_')[0]

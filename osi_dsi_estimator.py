@@ -424,7 +424,7 @@ def main(_):
     #     pkl.dump(lm_spikes, f)
 
     if flags.calculate_osi_dsi:
-        callbacks.osi_dsi_analysis(v1_spikes, lm_spikes, DG_angles)
+        callbacks.osi_dsi_analysis(v1_spikes, lm_spikes, DG_angles, fano_duration=flags.fano_duration) #fano duration has to be 300 or 1800 because of experimental data availability
     #     for trial_id in range(flags.n_trials_per_angle):
     #         t0 = time()
     #         # Reset the memory stats
@@ -515,6 +515,7 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_integer('n_output', 10, '')
     absl.app.flags.DEFINE_integer('n_trials_per_angle', 10, '')
     absl.app.flags.DEFINE_integer('fano_samples', 500, '')
+    absl.app.flags.DEFINE_integer('fano_duration', 300, '')
 
     # absl.app.flags.DEFINE_boolean('float16', False, '')
     absl.app.flags.DEFINE_boolean('caching', True, '')

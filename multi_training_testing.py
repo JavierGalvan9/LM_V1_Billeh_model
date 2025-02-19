@@ -66,6 +66,7 @@ parser.add_argument('--seed', default=3000, type=int)
 parser.add_argument('--neurons_per_output', default=16, type=int)
 parser.add_argument('--n_output', default=10, type=int)
 parser.add_argument('--fano_samples', default=500, type=int)
+parser.add_argument('--fano_duration', default=300, type=int)
 
 # parser.add_argument('--float16', default=False, action='store_true')
 parser.add_argument('--caching', default=True, action='store_true')
@@ -162,7 +163,7 @@ def main():
     # evaluation_commands = ["run", "-g", "1", "-m", "65", "-t", "0:45"]
 
     training_commands = ["run", "-g", f"{flags.n_gpus}", "-c", f"{4 * flags.n_gpus}", "-m", "60", "-t", "24:00"] 
-    # training_commands = ["run", "-g", f"{flags.n_gpus}", "-G", "L40S", "-c", f"{4 * flags.n_gpus}", "-m", "60", "-t", "24:00"] # L40S choose the particular gpu model for training with 48 GB of memory
+    # training_commands = ["run", "-g", f"{flags.n_gpus}", "-G", "L40S", "-c", f"{4 * flags.n_gpus}", "-m", "48", "-t", "10:00"] # L40S choose the particular gpu model for training with 48 GB of memory
     evaluation_commands = ["run", "-g", "1", "-m", "80", "-c", "4", "-t", "2:00"]
 
     # Define the training and evaluation script calls
