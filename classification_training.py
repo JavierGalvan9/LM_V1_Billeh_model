@@ -117,13 +117,14 @@ def main(_):
     # strategy = tf.distribute.MirroredStrategy(cross_device_ops=tf.distribute.ReductionToOneDevice(reduce_to_device="cpu:0"))
 
     if flags.test_only:
-        per_replica_batch_size = 20
+        per_replica_batch_size = 28
         val_steps = int(10000 / per_replica_batch_size)
     else:
         per_replica_batch_size = flags.batch_size
         val_steps = flags.val_steps
 
-    global_batch_size = per_replica_batch_size * strategy.num_replicas_in_sync
+    num_replicas = strategy.num_replicas_in_sync
+    global_batch_size = per_replica_batch_size * num_replicas
     print(f'Per replica batch size: {per_replica_batch_size}')
     print(f'Global batch size: {global_batch_size}\n')
     print(f'Training with current input: {flags.current_input}')
@@ -149,7 +150,7 @@ def main(_):
             networks, 
             lgn_inputs, 
             bkg_inputs, 
-            seq_len=flags.seq_len,
+            seq_len=flags.seq_len-delays[0],
             n_input=flags.n_input, 
             dtype=dtype, 
             input_weight_scale=flags.input_weight_scale,
@@ -180,7 +181,7 @@ def main(_):
             current_input=flags.current_input
             )
 
-        model.build((per_replica_batch_size, flags.seq_len, flags.n_input))
+        model.build((per_replica_batch_size, flags.seq_len-delays[0], flags.n_input))
         print(f"Model built in {time()-t0:.2f} s\n")
 
         # Store the initial model variables that are going to be trained
@@ -199,7 +200,7 @@ def main(_):
             raise ValueError
           
         # Build the optimizer
-        optimizer.build(model.trainable_variables)
+        # optimizer.build(model.trainable_variables)
         # #Enable loss scaling for training float16 model
         # if flags.dtype == 'float16':
         #     optimizer = mixed_precision.LossScaleOptimizer(optimizer) # to prevent suffering from underflow gradients when using tf.float16  
@@ -223,7 +224,7 @@ def main(_):
                 # Restore the model
                 checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
                 checkpoint.restore(checkpoint_directory).expect_partial()#.assert_consumed()
-                optimizer.build(model.trainable_variables)
+                # optimizer.build(model.trainable_variables)
             else:
                 try:
                     # Restore the model
@@ -244,7 +245,7 @@ def main(_):
                     # Restore the model
                     checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
                     checkpoint.restore(checkpoint_directory).expect_partial()#.assert_consumed()
-                    optimizer.build(model.trainable_variables)
+                    # optimizer.build(model.trainable_variables)
 
         # Restore model and optimizer from an intermediate checkpoint if it exists
         elif flags.ckpt_dir != '' and os.path.exists(os.path.join(flags.ckpt_dir, "Intermediate_checkpoints")):
@@ -262,7 +263,7 @@ def main(_):
                 # Restore the model
                 checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
                 checkpoint.restore(checkpoint_directory).expect_partial()#.assert_consumed()
-                optimizer.build(model.trainable_variables)
+                # optimizer.build(model.trainable_variables)
             else:
                 # Restore the model
                 checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
@@ -292,13 +293,13 @@ def main(_):
         # Extract outputs of intermediate keras layers to get access to spikes and membrane voltages of the model
         rsnn_layer = model.get_layer('rsnn')
         
-        ### RECURRENT REGULARIZERS ###
-        v1_recurrent_regularizer = losses.IndividualStiffRegularizer(flags.recurrent_weight_regularization, networks['v1'], penalize_relative_change=False, 
-                                                           initial_values=rsnn_layer.cell.v1.recurrent_weight_values, dtype=tf.float32)
-        model.add_loss(lambda: v1_recurrent_regularizer(rsnn_layer.cell.v1.recurrent_weight_values))
-        lm_recurrent_regularizer = losses.IndividualStiffRegularizer(flags.recurrent_weight_regularization, networks['lm'], penalize_relative_change=False, 
-                                                           initial_values=rsnn_layer.cell.lm.recurrent_weight_values, dtype=tf.float32)
-        model.add_loss(lambda: lm_recurrent_regularizer(rsnn_layer.cell.lm.recurrent_weight_values))
+        # ### RECURRENT REGULARIZERS ###
+        # v1_recurrent_regularizer = losses.IndividualStiffRegularizer(flags.recurrent_weight_regularization, networks['v1'], penalize_relative_change=False, 
+        #                                                    initial_values=rsnn_layer.cell.v1.recurrent_weight_values, dtype=tf.float32)
+        # model.add_loss(lambda: v1_recurrent_regularizer(rsnn_layer.cell.v1.recurrent_weight_values))
+        # lm_recurrent_regularizer = losses.IndividualStiffRegularizer(flags.recurrent_weight_regularization, networks['lm'], penalize_relative_change=False, 
+        #                                                    initial_values=rsnn_layer.cell.lm.recurrent_weight_values, dtype=tf.float32)
+        # model.add_loss(lambda: lm_recurrent_regularizer(rsnn_layer.cell.lm.recurrent_weight_values))
 
         # ### INTERAREA REGULARIZERS ###
         # v1_lm_regularizer = losses.IndividualStiffRegularizer(flags.interarea_weight_regularization, networks['v1'], penalize_relative_change=False, recurrent_weights=False, source_area='lm', 
@@ -330,16 +331,6 @@ def main(_):
             per_example_loss = per_example_loss / tf.reduce_sum(_w, axis=1, keepdims=True)
             per_example_loss = tf.reduce_sum(per_example_loss, axis=-1) #sum over chunks (0 all chunks except the last one)
             class_loss = tf.nn.compute_average_loss(per_example_loss, global_batch_size=global_batch_size)
-            # tf.print('Per_example_loss: ', per_example_loss.shape, per_example_loss)
-            # tf.print(tf.reduce_sum(_w, axis=1, keepdims=True).shape)
-            # per_example_loss_LM = loss_object(_l, _p['lm'], sample_weight=_w)
-            # per_example_loss = flags.V1_cel_weight * per_example_loss_V1 + flags.LM_cel_weight * per_example_loss_LM
-            # per_example_loss = tf.cast(per_example_loss_v1, tf.float32)
-            # normalize per_example_loss with respect to the weights for each example
-            # tf.print('Per_example_loss3: ', per_example_loss.shape)
-            # per_replica_loss = tf.reduce_mean(per_example_loss, axis=0)
-            # tf.print('Per_replica_loss: ', per_replica_loss.shape, per_replica_loss)
-            # tf.print('Automatic average: ', b.shape, b)
             
             return class_loss
         
@@ -347,6 +338,9 @@ def main(_):
         # abstract_layer = model.get_layer('abstract_output')
         extractor_model = tf.keras.Model(inputs=model.inputs,
                                          outputs=model.output)
+        # create a keras model for just running 
+        feedforward_model = tf.keras.Model(inputs=model.inputs,
+                                        outputs=rsnn_layer.output)
         
         # These "dummy" zeros are injected to the models membrane voltage
         # Provides the opportunity to compute gradients wrt. membrane voltages at all time steps
@@ -356,6 +350,7 @@ def main(_):
         # state_variables = tf.nest.map_structure(lambda a: tf.Variable(
         #     a, trainable=False, synchronization=tf.VariableSynchronization.ON_READ
         # ), zero_state)
+        # dummy_zeros = tf.zeros((per_replica_batch_size, flags.seq_len-delays[0], n_total_neurons), dtype)
 
         # Add other metrics and losses
         train_loss = tf.keras.metrics.Mean()
@@ -386,7 +381,7 @@ def main(_):
         # Precompute spontaneous LGN firing rates once
         def compute_spontaneous_lgn_firing_rates():
             cache_dir = "lgn_model/.cache_lgn"
-            cache_file = os.path.join(cache_dir, f"spontaneous_lgn_probabilities_n_input_{flags.n_input}_seqlen_{flags.seq_len}.pkl")
+            cache_file = os.path.join(cache_dir, f"spontaneous_lgn_probabilities_n_input_{flags.n_input}_seqlen_{flags.seq_len-delays[0]}.pkl")
             if os.path.exists(cache_file):
                 with open(cache_file, "rb") as f:
                     spontaneous_prob = pkl.load(f)
@@ -394,8 +389,8 @@ def main(_):
             else:
                 # Compute and cache the spontaneous firing rates
                 spontaneous_lgn_firing_rates = stim_dataset.generate_drifting_grating_tuning(
-                    seq_len=flags.seq_len,
-                    pre_delay=flags.seq_len,
+                    seq_len=flags.seq_len-delays[0],
+                    pre_delay=flags.seq_len-delays[0],
                     post_delay=0,
                     n_input=flags.n_input,
                     rotation=flags.rotation,
@@ -430,13 +425,14 @@ def main(_):
 
         if flags.gradient_checkpointing:
             @tf.recompute_grad
-            def roll_out_with_gradient_checkpointing(x, state_vars):
+            def roll_out_with_gradient_checkpointing(x, dummy_zeros, state_vars):
                 # Call extractor model without storing intermediate state variables
-                dummy_zeros = tf.zeros((per_replica_batch_size, seq_len, n_total_neurons), dtype)
+                # dummy_zeros = tf.zeros((per_replica_batch_size, seq_len, n_total_neurons), dtype)
                 _out, _p = extractor_model((x, dummy_zeros, state_vars))
                 return _out, _p
-            _out, _p = roll_out_with_gradient_checkpointing(_x, _initial_state)
+            _out, _p = roll_out_with_gradient_checkpointing(_x, dummy_zeros, _initial_state)
         else:
+            # dummy_zeros = tf.zeros((per_replica_batch_size, seq_len, n_total_neurons), dtype)
             _out, _p = extractor_model((_x, dummy_zeros, _initial_state))
 
         # _out, _p = extractor_model((_x, dummy_zeros, _initial_state))
@@ -464,28 +460,52 @@ def main(_):
             lm_voltage_loss = lm_voltage_regularizer(_lm_v) # trim is irrelevant for this
             voltage_loss = v1_voltage_loss + lm_voltage_loss
 
-            v1_recurrent_stiff_regularizer = v1_recurrent_regularizer(rsnn_layer.cell.v1.recurrent_weight_values)
-            lm_recurrent_stiff_regularizer = lm_recurrent_regularizer(rsnn_layer.cell.lm.recurrent_weight_values)
-            # v1_lm_weights_l2_regularizer = v1_lm_regularizer(rsnn_layer.cell.v1.interarea_weight_values['lm'])
-            # lm_v1_weights_l2_regularizer = lm_v1_regularizer(rsnn_layer.cell.lm.interarea_weight_values['v1'])
-            regularizers_loss = v1_recurrent_stiff_regularizer + lm_recurrent_stiff_regularizer #+ v1_lm_weights_l2_regularizer + lm_v1_weights_l2_regularizer
-            # regularizers_loss = tf.constant(0., tf.float32)
+            # v1_recurrent_stiff_regularizer = v1_recurrent_regularizer(rsnn_layer.cell.v1.recurrent_weight_values)
+            # lm_recurrent_stiff_regularizer = lm_recurrent_regularizer(rsnn_layer.cell.lm.recurrent_weight_values)
+            # # v1_lm_weights_l2_regularizer = v1_lm_regularizer(rsnn_layer.cell.v1.interarea_weight_values['lm'])
+            # # lm_v1_weights_l2_regularizer = lm_v1_regularizer(rsnn_layer.cell.lm.interarea_weight_values['v1'])
+            # regularizers_loss = v1_recurrent_stiff_regularizer + lm_recurrent_stiff_regularizer #+ v1_lm_weights_l2_regularizer + lm_v1_weights_l2_regularizer
+            regularizers_loss = tf.constant(0., tf.float32)
             
             classification_loss = 10*compute_loss(_y, _p, _w)
             # Scale the losses since the optimizer will aggregate the gradients across replicas automatically before applying them
             _loss = tf.nn.scale_regularization_loss(rate_loss + voltage_loss + regularizers_loss) + classification_loss
             
-            _aux = dict(rate_loss=rate_loss, voltage_loss=voltage_loss, regularizer_loss=regularizers_loss, classification_loss=classification_loss * strategy.num_replicas_in_sync)
+            _aux = dict(rate_loss=rate_loss, voltage_loss=voltage_loss, regularizer_loss=regularizers_loss, classification_loss=classification_loss * num_replicas)
             # tf.print('Loss: ', _loss, rate_loss, voltage_loss, classification_loss)
 
             return _out, _p, _loss, _aux
     
+    def roll_out_without_losses(_x, _state_variables, seq_len, return_spikes=False):
+        """Process initial delay period without computing gradients"""
+        _initial_state = _state_variables
+        dummy_zeros = tf.zeros((per_replica_batch_size, seq_len, n_total_neurons), dtype)
+        _out = feedforward_model((_x, dummy_zeros, _initial_state))
+        new_state = _out[1:] #(14)
+
+        if return_spikes:
+            hidden_variables = _out[0]
+            return hidden_variables, new_state  # Return spikes and state variables
+        else:
+            return new_state  # Return only the state variables
+    
     def train_step(_x, _y, _w, state_variables):
+        # Split input into initial delay and training periods inside the replica
+        _x = tf.cast(_x, dtype)
+        initial_period = _x[:, :delays[0], :]  # First delays[0] timesteps
+        training_period = _x[:, delays[0]:, :]  # Remaining timesteps
+        # remove first chunk from y and w
+        _y = _y[:, 1:]
+        _w = _w[:, 1:]
+        
+        # Process initial period without gradients
+        state_after_delay = roll_out_without_losses(initial_period, state_variables, delays[0])
+
         ### Forward propagation of the model
         with tf.GradientTape() as tape:
-            _out, _p, _loss, _aux = roll_out(tf.cast(_x, dtype), _y, _w, state_variables)
+            _out, _p, _loss, _aux = roll_out(training_period, _y, _w, state_after_delay)
             # Scale the loss for float16         
-            if flags.dtype=='float16':
+            if flags.dtype == 'float16':
                 _scaled_loss = optimizer.get_scaled_loss(_loss)
                 loss = _scaled_loss
             else:
@@ -493,7 +513,7 @@ def main(_):
 
         # # Print average gradients
         grad = tape.gradient(loss, model.trainable_variables)
-        if flags.dtype=='float16':
+        if flags.dtype == 'float16':
             grad = optimizer.get_unscaled_gradients(grad)
 
         # for g, v in zip(grad, model.trainable_variables):
@@ -508,23 +528,13 @@ def main(_):
 
         # Update the model metrics
         train_accuracy.update_state(_y, _p, sample_weight=_w)
-        train_loss.update_state(_loss * strategy.num_replicas_in_sync)
+        train_loss.update_state(_loss * num_replicas)
         rate = tf.reduce_mean(tf.concat([_out[0][0], _out[0][2]], axis=-1))
         train_firing_rate.update_state(rate)
         train_rate_loss.update_state(_aux['rate_loss'])
         train_classification_loss.update_state(_aux['classification_loss'])
         train_voltage_loss.update_state(_aux['voltage_loss'])
         train_regularizer_loss.update_state(_aux['regularizer_loss'])
-        
-        # # Get the batch values for the loss and the metrics
-        # rate_loss = _aux['rate_loss'] 
-        # voltage_loss = _aux['voltage_loss'] 
-        # regularizers_loss = _aux['regularizer_loss']
-        # classification_loss = _aux['classification_loss']
-        # predicted_classes = tf.cast(tf.argmax(_p, axis=-1), dtype=tf.int32)
-        # correct_predictions = tf.cast(tf.equal(predicted_classes, _y), tf.float32)
-        # tf.print('Correct predictions: ', correct_predictions.shape, correct_predictions[:, -1])
-        # _accuracy = tf.reduce_sum(correct_predictions * _w) / tf.reduce_sum(_w)
 
         rate_loss = train_rate_loss.result()
         voltage_loss = train_voltage_loss.result()
@@ -534,23 +544,36 @@ def main(_):
         rate = train_firing_rate.result()
         accuracy = train_accuracy.result()
 
-        return grad, [accuracy, _loss, rate, rate_loss, voltage_loss, regularizers_loss, classification_loss]
+        return state_after_delay, [accuracy, _loss, rate, rate_loss, voltage_loss, regularizers_loss, classification_loss]
 
     @tf.function
     def distributed_train_step(x, y, weights, state_variables):
-        grad, step_values = strategy.run(train_step, args=(x, y, weights, state_variables))
+        gray_state, step_values = strategy.run(train_step, args=(x, y, weights, state_variables))
         # step_values = [
         #     strategy.reduce(tf.distribute.ReduceOp.MEAN if i in [0, 2] else tf.distribute.ReduceOp.SUM, value, axis=None)
         #     for i, value in enumerate(step_values)
         # ]
 
-        return grad, step_values
+        return gray_state, step_values
     
-    def validation_step(_x, _y, _w, state_variables, output_spikes=True):
-        _out, _p, _loss, _aux = roll_out(_x, _y, _w, state_variables)
+    def validation_step(_x, _y, _w, state_variables, output_spikes=False):
+        # _out, _p, _loss, _aux = roll_out(_x, _y, _w, state_variables)
+
+        _x = tf.cast(_x, dtype)
+        initial_period = _x[:, :delays[0], :]  # First delays[0] timesteps
+        testing_period = _x[:, delays[0]:, :]  # Remaining timesteps
+        # remove first chunk from y and w
+        _y = _y[:, 1:]
+        _w = _w[:, 1:]
+        
+        # # Process initial period without gradients
+        _initial_out, state_after_delay = roll_out_without_losses(initial_period, state_variables, delays[0], return_spikes=True)
+        # ### Forward propagation of the model
+        _out, _p, _loss, _aux = roll_out(testing_period, _y, _w, state_after_delay)
+
         val_accuracy.update_state(_y, _p, sample_weight=_w)
         # Update the validation loss
-        val_loss.update_state(_loss * strategy.num_replicas_in_sync)
+        val_loss.update_state(_loss * num_replicas)
         # Compute the rate
         _rate = tf.reduce_mean(tf.concat([_out[0][0], _out[0][2]], axis=-1))
         # Update the validation metrics
@@ -562,7 +585,12 @@ def main(_):
         # tf.nest.map_structure(lambda _a, _b: _a.assign(_b), list(state_variables), _out[1:])
 
         if output_spikes:
-            _v1_z, _lm_z = _out[0][0], _out[0][2]
+            # _v1_z0, _lm_z0 = _initial_out[0], _initial_out[2]
+            # _v1_z, _lm_z = _out[0][0], _out[0][2]
+            # concatenate the spikes of two periods
+            _v1_z = tf.concat([_initial_out[0], _out[0][0]], axis=1)
+            _lm_z = tf.concat([_initial_out[2], _out[0][2]], axis=1)
+
             return _v1_z, _lm_z   
 
     @tf.function
@@ -608,10 +636,9 @@ def main(_):
         # Generate LGN spikes
         x = generate_spontaneous_spikes(spontaneous_prob)
         # Simulate the network with a gray screen   
-        y_spontaneous = tf.constant(0, dtype=dtype, shape=(per_replica_batch_size,1)) 
-        w_spontaneous = tf.constant(0, dtype=dtype, shape=(per_replica_batch_size,1))
-        _out = roll_out(x, y_spontaneous, w_spontaneous, zero_state, True)
-        return tuple(_out[1:])
+        gray_state = roll_out_without_losses(x, zero_state, flags.seq_len-delays[0])
+
+        return gray_state
     
     @tf.function
     def distributed_generate_gray_state(spontaneous_prob):
@@ -662,8 +689,8 @@ def main(_):
         for step in range(val_steps): # total samples = batch_size * val_steps
             t0 = time()
             # Generate LGN spikes
-            x, y, _, w = next(test_it)
-            v1_spikes, lm_spikes = distributed_validation_step(x, y, w, gray_state, output_spikes=True)
+            x, y, image_id, w = next(test_it)
+            v1_spikes, lm_spikes = distributed_validation_step(x, y, w, gray_state, True)
             ### Process the output spikes
             mean_output = process_output_spikes(v1_spikes, networks, seq_len=flags.seq_len, down_sample=10, 
                                                 n_output=flags.n_output, area='v1')
@@ -677,7 +704,7 @@ def main(_):
             # accumulated_p_v1.append(mean_output_v1.numpy().astype(np.float16))
             # accumulated_p_lm.append(mean_output_lm.numpy().astype(np.float16))
 
-            print(f'Step {step}/{val_steps} running time: {time() - t0:.2f}s\n')
+            print(f'\nStep {step}/{val_steps} running time: {time() - t0:.2f}s')
             for gpu_id in range(len(strategy.extended.worker_devices)):
                 printgpu(gpu_id=gpu_id)
 
@@ -705,73 +732,25 @@ def main(_):
             v1_spikes = strategy.experimental_local_results(v1_spikes)[-1]
             lm_spikes = strategy.experimental_local_results(lm_spikes)[-1]
             y = strategy.experimental_local_results(y)[-1]
+            image_id = strategy.experimental_local_results(image_id)[-1]
 
         # save pkl file with x[0], v1_spikes[0], lm_spikes[0], y[0]
         with open('x_v1_lm_spikes.pkl', 'wb') as f:
             pkl.dump({'x': x[0], 'v1_spikes': v1_spikes[0], 'lm_spikes': lm_spikes[0], 'y': y[0]}, f)
         
-        callbacks.on_testing_end(x, v1_spikes, lm_spikes, y, metric_values, verbose=True)    
+        callbacks.on_testing_end(x, v1_spikes, lm_spikes, y, image_id, metric_values, verbose=True)    
         # Reset the metrics for the next epoch
         reset_validation_metrics()
-
 
     # import datetime
     # profiler_logdir = f"{logdir}/logs/profile/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     # # Set steps to profile
     # profile_start_step = 1
     # profile_end_step = 4
-
-    # def accumulated_gradients(gradients, step_gradients, num_grad_accumulates):
-    #     if gradients is None:
-    #         gradients = [flat_gradients(g) / num_grad_accumulates for g in step_gradients]
-    #     else:
-    #         for i, g in enumerate(step_gradients):
-    #             gradients[i] += flat_gradients(g) / num_grad_accumulates
-            
-    #     return gradients
-
-    # def flat_gradients(grads_or_idx_slices):
-    #     '''Convert gradients if it's tf.IndexedSlices, to be able to add them to the accumulated gradients if they are in sparse representation.
-    #     When computing gradients for operation concerning `tf.gather`, the type of gradients 
-    #     '''
-    #     if type(grads_or_idx_slices) == tf.IndexedSlices:
-    #         return tf.scatter_nd(
-    #             tf.expand_dims(grads_or_idx_slices.indices, 1),
-    #             grads_or_idx_slices.values,
-    #             grads_or_idx_slices.dense_shape
-    #         )
-    #     return grads_or_idx_slices
-
-    # # Function to accumulate gradients across steps in a distributed setup
-    # def accumulated_gradients(gradients, step_gradients):
-    #     # Reduce the gradients across replicas by averaging over accumulation steps and replicas
-    #     # reduced_gradients = [strategy.reduce(tf.distribute.ReduceOp.SUM, g, axis=None) for g in step_gradients]
-    #     # Initialize or accumulate gradients
-    #     if gradients is None:
-    #         gradients = step_gradients
-    #     else:
-    #         gradients = [g_accum + g_reduced for g_accum, g_reduced in zip(gradients, step_gradients)]
-            
-    #     return gradients 
-
-    # # @tf.function
-    # def apply_accumulated_gradients(gradients, num_grad_accumulates):
-    #     # Scale the gradients appropriately
-    #     # scaled_gradients = [g / num_grad_accumulates for g in gradients]
-    #     # optimizer.apply_gradients(zip(scaled_gradients, model.trainable_variables))
-    #     optimizer.apply_gradients(zip(gradients, model.trainable_variables))
-
-    # @tf.function
-    # def distributed_apply_accumulated_gradients(gradients, num_grad_accumulates):
-    #     strategy.run(apply_accumulated_gradients, args=(gradients, num_grad_accumulates,))
-
-    # # @tf.function
-    # # def distributed_apply_acumulated_gradients(gradients):
-    # #     strategy.run(apply_accumulated_gradients, args=(gradients,))   
-
     else:
         for epoch in range(n_prev_epochs, n_prev_epochs + flags.n_epochs):
             callbacks.on_epoch_start()  
+            
             # Reset the model state to the gray state  
             gray_state = distributed_generate_gray_state(spontaneous_prob)
             
@@ -779,36 +758,25 @@ def main(_):
             it = iter(train_data_set)
             test_it = iter(test_data_set)
             
-            gradients = None
             for step in range(flags.steps_per_epoch):
                 callbacks.on_step_start()
                 # # # Start profiler at specified step
                 # if step == profile_start_step:
                 #     tf.profiler.experimental.start(logdir=logdir)
 
-                # try resetting every iteration or every 25 steps to prevent drifting away from the gray state
-                if flags.reset_every_step or step % 25 == 0:
-                    print("Resetting gray state!")
-                    gray_state = distributed_generate_gray_state(spontaneous_prob)
+                # # try resetting every iteration or every 25 steps to prevent drifting away from the gray state
+                # if flags.reset_every_step or step % 25 == 0:
+                #     print("Resetting gray state!")
+                #     gray_state = distributed_generate_gray_state(spontaneous_prob)
 
                 # Generate LGN spikes
                 x, y, _, w = next(it) # x dtype tf.bool
-                
                 # with tf.profiler.experimental.Trace('train', step_num=step, _r=1):
                 try:
-                    step_gradients, step_values = distributed_train_step(x, y, w, gray_state)
-                    # distributed_apply_accumulated_gradients(step_gradients, num_grad_accumulates)
-                    # gradients = accumulated_gradients(gradients, step_gradients)
+                    gray_state, step_values = distributed_train_step(x, y, w, gray_state)
+                    # step_gradients, step_values = distributed_train_step(x, y, w, gray_state)
                 except tf.errors.ResourceExhaustedError as e:
                     print("OOM error occurred!")
-
-                # # Update the gradients every num_grad_accumulates steps
-                # if (step + 1) % flags.num_grad_accumulates == 0:
-                #     print("Applying gradients!")
-                #     # apply_accumulated_gradients(gradients, flags.num_grad_accumulates)
-                #     distributed_apply_accumulated_gradients(gradients, num_grad_accumulates)
-                #     # optimizer.apply_gradients(zip(gradients, model.trainable_variables))
-                #     gradients = None
 
                 # # # Stop profiler after profiling steps
                 # if step == profile_end_step:
@@ -820,7 +788,7 @@ def main(_):
             val_t0 = time()  
             for step in range(val_steps): # total samples = batch_size * val_steps
                 # Generate LGN spikes
-                x, y, _, w = next(test_it)
+                x, y, image_id, w = next(test_it)
                 v1_spikes, lm_spikes = distributed_validation_step(x, y, w, gray_state, output_spikes=True)
 
             print(f'\nValidation running time: {time() - val_t0:.2f}s')
@@ -833,17 +801,18 @@ def main(_):
             metric_values = train_values + val_values
 
             # select only the values for the last replica in case there are multiple replicas
-            if strategy.num_replicas_in_sync > 1:
+            if num_replicas > 1:
                 x = strategy.experimental_local_results(x)[-1]
                 v1_spikes = strategy.experimental_local_results(v1_spikes)[-1]
                 lm_spikes = strategy.experimental_local_results(lm_spikes)[-1]
                 y = strategy.experimental_local_results(y)[-1]
+                image_id = strategy.experimental_local_results(image_id)[-1]
 
             # # save pkl file with x[0], v1_spikes[0], lm_spikes[0], y[0]
             # with open('x_v1_lm_spikes.pkl', 'wb') as f:
             #     pkl.dump({'x': x[0], 'v1_spikes': v1_spikes[0], 'lm_spikes': lm_spikes[0], 'y': y[0]}, f)
 
-            stop = callbacks.on_epoch_end(x, v1_spikes, lm_spikes, y, metric_values, verbose=True)    
+            stop = callbacks.on_epoch_end(x, v1_spikes, lm_spikes, y, image_id, metric_values, verbose=True)    
             
             if stop:
                 break
@@ -903,7 +872,7 @@ if __name__ == '__main__':
     absl.app.flags.DEFINE_integer('val_steps', 10, '')# EA and garret dose not need this many but pure classification needs 156 = int(10000/64)
     # number of LGN filters in visual space (input population)
     absl.app.flags.DEFINE_integer('n_input', 17400, '')
-    absl.app.flags.DEFINE_integer('seq_len', 600, '')
+    absl.app.flags.DEFINE_integer('seq_len', 200, '')
     absl.app.flags.DEFINE_integer('n_cues', 3, '')
     absl.app.flags.DEFINE_integer('recall_duration', 40, '')
     absl.app.flags.DEFINE_integer('cue_duration', 40, '')

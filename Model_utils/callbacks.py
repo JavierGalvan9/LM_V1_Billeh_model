@@ -1068,7 +1068,7 @@ class ClassificationCallbacks:
         print(f'Epoch {self.epoch:2d}/{self.total_epochs} @ {date_str}')
         tf.print(f'\nEpoch {self.epoch:2d}/{self.total_epochs} @ {date_str}')
 
-    def on_epoch_end(self, x, v1_spikes, lm_spikes, y, metric_values, verbose=True):
+    def on_epoch_end(self, x, v1_spikes, lm_spikes, y, image_id, metric_values, verbose=True):
         
         if self.flags.dtype != 'float32':
             v1_spikes = v1_spikes.numpy().astype(np.float32)
@@ -1113,11 +1113,11 @@ class ClassificationCallbacks:
             self.no_improve_epochs = 0
             self.save_best_model()
             images_dir = self.logdir
-            self.classification_boxplots(x, v1_spikes, lm_spikes, y, images_dir=images_dir)
-            self.classification_rates(x, v1_spikes, lm_spikes, y, images_dir=images_dir)
+            self.classification_boxplots(x, v1_spikes, lm_spikes, y, image_id, images_dir=images_dir)
+            self.classification_rates(x, v1_spikes, lm_spikes, y, image_id, images_dir=images_dir)
             self.plot_mean_firing_rate_boxplot(v1_spikes, lm_spikes, y, images_dir=images_dir)
             self.plot_raster(x, v1_spikes, lm_spikes, y, images_dir=images_dir)
-            self.model_variables_dict['Best'] = {var.name: var.numpy().astype(np.float16) for var in self.model.trainable_variables}
+            # self.model_variables_dict['Best'] = {var.name: var.numpy().astype(np.float16) for var in self.model.trainable_variables}
         else:
             self.no_improve_epochs += 1
            
@@ -1154,7 +1154,7 @@ class ClassificationCallbacks:
             for gpu_id in range(len(self.strategy.extended.worker_devices)):
                 printgpu(gpu_id=gpu_id)
 
-    def on_testing_end(self, x, v1_spikes, lm_spikes, y, metric_values, verbose=True):
+    def on_testing_end(self, x, v1_spikes, lm_spikes, y, image_id, metric_values, verbose=True):
         
         if self.flags.dtype != 'float32':
             v1_spikes = v1_spikes.numpy().astype(np.float32)
@@ -1187,9 +1187,9 @@ class ClassificationCallbacks:
         with open(f'{images_dir}/Noise_analysis/validation_results_std_{self.flags.mnist_noise_std}.pkl', 'wb') as f:
             pkl.dump({'validation_results': val_values}, f)
 
-        self.classification_boxplots(x, v1_spikes, lm_spikes, y, images_dir=images_dir)
+        self.classification_boxplots(x, v1_spikes, lm_spikes, y, image_id, images_dir=images_dir)
         self.classification_stripplot(v1_spikes, y, images_dir=images_dir)
-        self.classification_rates(x, v1_spikes, lm_spikes, y, images_dir=images_dir)
+        self.classification_rates(x, v1_spikes, lm_spikes, y, image_id, images_dir=images_dir)
         self.plot_mean_firing_rate_boxplot(v1_spikes, lm_spikes, y, images_dir=images_dir)
         self.plot_raster(x, v1_spikes, lm_spikes, y, images_dir=images_dir)
 
@@ -1568,7 +1568,8 @@ class ClassificationCallbacks:
         plt.savefig(os.path.join(boxplots_dir, f'epoch_{self.epoch}.png'), dpi=300, transparent=False)
         plt.close()
 
-    def classification_boxplots(self, x_spikes, v1_spikes, lm_spikes, y, images_dir=''):
+    def classification_boxplots(self, x_spikes, v1_spikes, lm_spikes, y, image_id, images_dir=''):
+        test_images, test_labels = tf.keras.datasets.mnist.load_data()[1]
         total_trials = min(v1_spikes.shape[0], 5)
         for trial_id in range(total_trials):
             boxplots_dir = os.path.join(images_dir, f'Readout_Populations', f'Epoch {self.epoch}')
@@ -1626,23 +1627,24 @@ class ClassificationCallbacks:
             ], loc='upper left', fontsize=20, framealpha=0.6)
 
             # Add inset with MNIST image
-            inset_ax = fig.add_axes([0.75, 0.7, 0.2, 0.3])  # [x, y, width, height] relative to figure
+            inset_ax = fig.add_axes([0.75, 0.7, 0.2, 0.25])  # [x, y, width, height] relative to figure
             # inset_ax.imshow(images[9].squeeze(), cmap='gray')
-            data = '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/lgn_model/data/lgn_full_col_cells_240x120.csv'
-            df = pd.read_csv(data, sep=' ')
-            lgn_x = df['x']
-            lgn_y = df['y']
-            rates = np.sum(x_spikes[trial_id, self.pre_delay:-self.post_delay, :], axis=0)
-            # Create a 2D grid for the rates
-            grid_x, grid_y = np.meshgrid(np.arange(240), np.arange(120))
-            rate_grid = np.zeros_like(grid_x, dtype=float)
-            # Populate the rate grid using positions x and y
-            for i in range(len(lgn_x)):
-                x_grid = int(lgn_x[i])
-                y_grid = int(lgn_y[i])
-                rate_grid[y_grid, x_grid] += rates[i]
+            # data = '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/lgn_model/data/lgn_full_col_cells_240x120.csv'
+            # df = pd.read_csv(data, sep=' ')
+            # lgn_x = df['x']
+            # lgn_y = df['y']
+            # rates = np.sum(x_spikes[trial_id, self.pre_delay:-self.post_delay, :], axis=0)
+            # # Create a 2D grid for the rates
+            # grid_x, grid_y = np.meshgrid(np.arange(240), np.arange(120))
+            # rate_grid = np.zeros_like(grid_x, dtype=float)
+            # # Populate the rate grid using positions x and y
+            # for i in range(len(lgn_x)):
+            #     x_grid = int(lgn_x[i])
+            #     y_grid = int(lgn_y[i])
+            #     rate_grid[y_grid, x_grid] += rates[i]
 
-            inset_ax.imshow(rate_grid, cmap='hot', interpolation='nearest')
+            # inset_ax.imshow(rate_grid, cmap='hot', interpolation='nearest')
+            inset_ax.imshow(test_images[int(image_id[trial_id].numpy()), :, :], cmap='gray')
             inset_ax.axis('off')  # No axis for the image
 
             fig.tight_layout()
@@ -1699,7 +1701,8 @@ class ClassificationCallbacks:
             fig.savefig(os.path.join(boxplots_dir, f'trial_{trial_id}_stripplot.png'), dpi=300, transparent=False)
             plt.close()
             
-    def classification_rates(self, x_spikes, v1_spikes, lm_spikes, y, images_dir=''):
+    def classification_rates(self, x_spikes, v1_spikes, lm_spikes, y, image_id, images_dir=''):
+        test_images, test_labels = tf.keras.datasets.mnist.load_data()[1]
         total_trials = min(v1_spikes.shape[0], 5)
         for trial_id in range(total_trials):
             # Set up directories for saving plots
@@ -1728,20 +1731,21 @@ class ClassificationCallbacks:
             ax.set_xlim(0, 200)
             # Add an inset with LGN activity
             inset_ax = fig.add_axes([0.4, 0.7, 0.25, 0.25])  # [x, y, width, height] relative to figure
-            data = '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/lgn_model/data/lgn_full_col_cells_240x120.csv'
-            df = pd.read_csv(data, sep=' ')
-            lgn_x = df['x']
-            lgn_y = df['y']
-            rates = np.sum(x_spikes[trial_id, self.pre_delay:-self.post_delay, :], axis=0)
-            # Create a 2D grid for the rates
-            grid_x, grid_y = np.meshgrid(np.arange(240), np.arange(120))
-            rate_grid = np.zeros_like(grid_x, dtype=float)
-            for i in range(len(lgn_x)):
-                x_grid = int(lgn_x[i])
-                y_grid = int(lgn_y[i])
-                rate_grid[y_grid, x_grid] += rates[i]
+            # data = '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/lgn_model/data/lgn_full_col_cells_240x120.csv'
+            # df = pd.read_csv(data, sep=' ')
+            # lgn_x = df['x']
+            # lgn_y = df['y']
+            # rates = np.sum(x_spikes[trial_id, self.pre_delay:-self.post_delay, :], axis=0)
+            # # Create a 2D grid for the rates
+            # grid_x, grid_y = np.meshgrid(np.arange(240), np.arange(120))
+            # rate_grid = np.zeros_like(grid_x, dtype=float)
+            # for i in range(len(lgn_x)):
+            #     x_grid = int(lgn_x[i])
+            #     y_grid = int(lgn_y[i])
+            #     rate_grid[y_grid, x_grid] += rates[i]
             
-            inset_ax.imshow(rate_grid, cmap='hot', interpolation='nearest')
+            # inset_ax.imshow(rate_grid, cmap='hot', interpolation='nearest')
+            inset_ax.imshow(test_images[int(image_id[trial_id].numpy()), :, :], cmap='gray')
             inset_ax.axis('off')  # No axis for the image
             
             # Tight layout and save the figure

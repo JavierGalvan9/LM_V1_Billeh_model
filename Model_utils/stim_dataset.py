@@ -509,7 +509,9 @@ def generate_pure_classification_data_set_from_generator(data_usage=0, contrast=
             label = tf.concat([tf.zeros(pre_chunks)] + [labels[ind]*tf.ones(resp_chunks)] + [tf.zeros(post_chunks)],axis=0)
             weight = tf.concat([tf.zeros(pre_chunks)] + [tf.ones(resp_chunks)] + [tf.zeros(post_chunks)],axis=0)
             # for plotting, label the image when it holds on
-            image_labels = tf.concat([tf.zeros(int(pre_delay/chunk_size))] + [labels[ind]*tf.ones(int(im_slice/chunk_size))] + [tf.zeros(int(post_delay/chunk_size))],axis=0)
+            # create a tensorarray with the ind value
+            image_labels = tf.constant(ind, shape=(1,))
+            # image_labels = tf.concat([tf.zeros(int(pre_delay/chunk_size))] + [labels[ind]*tf.ones(int(im_slice/chunk_size))] + [tf.zeros(int(post_delay/chunk_size))],axis=0)
             yield _z, label, image_labels, weight
 
     if current_input:
@@ -519,7 +521,8 @@ def generate_pure_classification_data_set_from_generator(data_usage=0, contrast=
 
     output_dtypes = (data_dtype, tf.int32, tf.int32, dtype)
     # when using generator for dataset, it should not contain the batch dim
-    output_shapes = (tf.TensorShape((int(seq_len/dt), n_input)), tf.TensorShape((n_chunks)), tf.TensorShape((n_chunks)), tf.TensorShape((n_chunks)))
+    # output_shapes = (tf.TensorShape((int(seq_len/dt), n_input)), tf.TensorShape((n_chunks)), tf.TensorShape((n_chunks)), tf.TensorShape((n_chunks)))
+    output_shapes = (tf.TensorShape((int(seq_len/dt), n_input)), tf.TensorShape((n_chunks)), tf.TensorShape((1,)), tf.TensorShape((n_chunks)))
     data_set = tf.data.Dataset.from_generator(_g, output_dtypes, output_shapes=output_shapes).map(lambda _a, _b, _c, _d:
                 (tf.cast(_a, data_dtype), tf.cast(_b, tf.int32), tf.cast(_c, tf.int32), tf.cast(_d, dtype)), num_parallel_calls=tf.data.AUTOTUNE)
         
