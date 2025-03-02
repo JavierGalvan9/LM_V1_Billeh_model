@@ -5,6 +5,7 @@ os.environ['TF_GPU_THREAD_MODE'] = 'global'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0' # before import tensorflow
 os.environ['TF_GPU_ALLOCATOR'] = 'cuda_malloc_async'
 # os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
+# os.environ['TF_ENABLE_ONEDNN_OPTS']= '1'
 
 import absl
 import numpy as np
@@ -38,6 +39,7 @@ print("--- CUDA Library path: ", lib_path)
 
 
 def main(_):
+    tf.config.optimizer.set_experimental_options({"cudnn_use_autotune": True})
     # Allow for memory growth (also to observe memory consumption)
     physical_devices = tf.config.list_physical_devices("GPU")
     for dev in physical_devices:
@@ -194,11 +196,7 @@ def main(_):
             print(f"Invalid optimizer: {flags.optimizer}")
             raise ValueError
         
-        optimizer.build(model.trainable_variables)
-        #Enable loss scaling for training float16 model
-        if flags.dtype == 'float16':
-            optimizer = mixed_precision.LossScaleOptimizer(optimizer) # to prevent suffering from underflow gradients when using tf.float16
-
+        # optimizer.build(model.trainable_variables)
         # Restore model and optimizer from a checkpoint if it exists
         if flags.ckpt_dir != '' and os.path.exists(os.path.join(flags.ckpt_dir, "Intermediate_checkpoints")):
             checkpoint_directory = tf.train.latest_checkpoint(os.path.join(flags.ckpt_dir, "Intermediate_checkpoints"))
@@ -218,7 +216,7 @@ def main(_):
                 # Restore the model
                 checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
                 checkpoint.restore(checkpoint_directory).expect_partial()#.assert_consumed()
-                optimizer.build(model.trainable_variables)
+                # optimizer.build(model.trainable_variables)
             else:
                 # Restore the model
                 checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
@@ -242,7 +240,7 @@ def main(_):
                 # Restore the model
                 checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
                 checkpoint.restore(checkpoint_directory).expect_partial()#.assert_consumed()
-                optimizer.build(model.trainable_variables)
+                # optimizer.build(model.trainable_variables)
             else:
                 # Restore the model
                 checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
@@ -250,6 +248,10 @@ def main(_):
         else:
             print(f"No checkpoint found in {flags.ckpt_dir} or {flags.restore_from}. Starting from scratch...\n")
             checkpoint = None
+
+        #Enable loss scaling for training float16 model
+        if flags.dtype == 'float16':
+            optimizer = mixed_precision.LossScaleOptimizer(optimizer) # to prevent suffering from underflow gradients when using tf.float16  
 
         model_variables_dict['Best'] =  {var.name: var.numpy().astype(np.float16) for var in model.trainable_variables}
         print(f"Model variables stored in dictionary\n")
@@ -410,6 +412,7 @@ def main(_):
         # state_variables = tf.nest.map_structure(lambda a: tf.Variable(
         #     a, trainable=False, synchronization=tf.VariableSynchronization.ON_READ
         # ), zero_state)
+        dummy_zeros = tf.zeros((per_replica_batch_size, flags.seq_len, n_total_neurons), dtype)
 
         # Add other metrics and losses
         train_loss = tf.keras.metrics.Mean()
@@ -479,13 +482,12 @@ def main(_):
         # Access initial state values directly
         _initial_state = _state_variables
         seq_len = tf.shape(_x)[1]
-        dummy_zeros = tf.zeros((per_replica_batch_size, seq_len, n_total_neurons), dtype)
 
         if flags.gradient_checkpointing:
             @tf.recompute_grad
             def roll_out_with_gradient_checkpointing(x, state_vars):
                 # Call extractor model without storing intermediate state variables
-                dummy_zeros = tf.zeros((per_replica_batch_size, seq_len, n_total_neurons), dtype)
+                # dummy_zeros = tf.zeros((per_replica_batch_size, seq_len, n_total_neurons), dtype)
                 _out = extractor_model((x, dummy_zeros, state_vars))
                 return _out
             _out, _ = roll_out_with_gradient_checkpointing(_x, _initial_state)
@@ -631,6 +633,9 @@ def main(_):
         # train_regularizer_loss.update_state(_aux_gratings['regularizer_loss'] + _aux_spontaneous['regularizer_loss'])
         # train_osi_dsi_loss.update_state(_aux_gratings['osi_dsi_loss'] + _aux_spontaneous['osi_dsi_loss'])
         # train_sync_loss.update_state(_aux_gratings['sync_loss'] + _aux_spontaneous['sync_loss'])
+        # print the maximum voltage value
+        tf.print('  V1 voltage: ', tf.reduce_max(strategy.experimental_local_results(_out_gratings)[0][0][1]), tf.reduce_min(strategy.experimental_local_results(_out_spontaneous)[0][0][1]))
+        tf.print('  LM voltage: ', tf.reduce_max(strategy.experimental_local_results(_out_gratings)[0][0][3]), tf.reduce_min(strategy.experimental_local_results(_out_spontaneous)[0][0][3]))
 
         v1_spikes = strategy.experimental_local_results(_out_gratings)[0][0][0]
         lm_spikes = strategy.experimental_local_results(_out_gratings)[0][0][2]

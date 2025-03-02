@@ -683,20 +683,20 @@ class VoltageRegularization:
         self._cell = cell
         self._dtype = dtype
         self._core_mask = core_mask
-        self._voltage_offset = tf.cast(self._cell.voltage_offset, dtype)
-        self._voltage_scale = tf.cast(self._cell.voltage_scale, dtype)
-        if core_mask is not None:
-            self._voltage_offset = tf.boolean_mask(self._voltage_offset, core_mask)
-            self._voltage_scale = tf.boolean_mask(self._voltage_scale, core_mask)
+        # self._voltage_offset = tf.cast(self._cell.voltage_offset, dtype)
+        # self._voltage_scale = tf.cast(self._cell.voltage_scale, dtype)
+        # if core_mask is not None:
+        #     self._voltage_offset = tf.boolean_mask(self._voltage_offset, core_mask)
+        #     self._voltage_scale = tf.boolean_mask(self._voltage_scale, core_mask)
 
     def __call__(self, voltages):
-        # if voltages.dtype != self._dtype:
-        #     voltages = tf.cast(voltages, self._dtype)
+        if voltages.dtype != self._dtype:
+            voltages = tf.cast(voltages, self._dtype)
 
         if self._core_mask is not None:
             voltages = tf.boolean_mask(voltages, self._core_mask, axis=2)
 
-        voltages = (voltages - self._voltage_offset) / self._voltage_scale
+        # voltages = (voltages - self._voltage_offset) / self._voltage_scale
         # v_tot = tf.square(tf.nn.relu(voltages - 1.0) + tf.nn.relu(-voltages + 1.0))
         # More efficient computation (the loss function tries to keep the voltage close to the threshold)
         v_tot = tf.square(voltages - 1.0)

@@ -25,7 +25,7 @@ def spike_gauss(v_scaled, sigma, amplitude):
         dz_dv_scaled = gauss_pseudo(v_scaled, sigma, amplitude)
         de_dv_scaled = de_dz * dz_dv_scaled
 
-        return [de_dv_scaled, tf.zeros_like(sigma), tf.zeros_like(amplitude)]
+        return [de_dv_scaled, None, None]
 
     return tf.identity(z_, name='spike_gauss'), grad
 
@@ -40,7 +40,7 @@ def spike_gauss_16(v_scaled, sigma, amplitude):
 
         de_dv_scaled = de_dz * dz_dv_scaled
 
-        return [de_dv_scaled, tf.zeros_like(sigma), tf.zeros_like(amplitude)]
+        return [de_dv_scaled, None, None]
 
     return tf.identity(z_, name='spike_gauss'), grad
 
@@ -55,7 +55,7 @@ def spike_gauss_b16(v_scaled, sigma, amplitude):
 
         de_dv_scaled = de_dz * dz_dv_scaled
 
-        return [de_dv_scaled, tf.zeros_like(sigma), tf.zeros_like(amplitude)]
+        return [de_dv_scaled, None, None]
 
     return tf.identity(z_, name='spike_gauss'), grad
 
@@ -87,7 +87,7 @@ def spike_function(v_scaled, dampening_factor):
 
         de_dv_scaled = de_dz * dz_dv_scaled
 
-        return [de_dv_scaled, tf.zeros_like(dampening_factor)]
+        return [de_dv_scaled, None]
 
     return tf.identity(z_, name="spike_function"), grad
 
@@ -103,7 +103,7 @@ def spike_function_16(v_scaled, dampening_factor):
 
         de_dv_scaled = de_dz * dz_dv_scaled
 
-        return [de_dv_scaled, tf.zeros_like(dampening_factor)]
+        return [de_dv_scaled, None]
 
     return tf.identity(z_, name="spike_function"), grad
 
@@ -119,7 +119,7 @@ def spike_function_b16(v_scaled, dampening_factor):
 
         de_dv_scaled = de_dz * dz_dv_scaled
 
-        return [de_dv_scaled, tf.zeros_like(dampening_factor)]
+        return [de_dv_scaled, None]
 
     return tf.identity(z_, name="spike_function"), grad
 
@@ -246,17 +246,19 @@ def make_pre_ind_table(indices, n_source_neurons=197613):
     This approach ensures that every presynaptic neuron, even those with no
     postsynaptic connections, has an entry in the RaggedTensor.
     """
-    pre_inds = indices[:, 1]
-    n_syn = pre_inds.shape[0]
-    # Since pre_inds may not be sorted, we sort them along with synapse_indices
-    sorted_pre_inds, sorted_synapse_indices = tf.math.top_k(-pre_inds, k=n_syn)
-    sorted_pre_inds = tf.cast(-sorted_pre_inds, dtype=tf.int32)  # Undo the negation to get the sorted pre_inds
-    # Count occurrences (out-degrees) for each presynaptic neuron using bincount
-    counts = tf.math.bincount(sorted_pre_inds, minlength=n_source_neurons)
-    # Create row_splits that covers all presynaptic neurons (0 to n_source_neurons)
+    # Extract presynaptic IDs
+    pre_ids = indices[:, 1]  # shape: [num_synapses]
+    # Sort the synapses by presynaptic ID
+    sort_idx = tf.argsort(pre_ids, axis=0)
+    sorted_pre = tf.gather(pre_ids, sort_idx)
+    # Count how many synapses belong to each presynaptic neuron
+    # (We cast to int32 for tf.math.bincount.)
+    counts = tf.math.bincount(tf.cast(sorted_pre, tf.int32), minlength=n_source_neurons)
+    # Build row_splits to define a RaggedTensor from these sorted indices
     row_splits = tf.concat([[0], tf.cumsum(counts)], axis=0)
-    # Create the RaggedTensor with empty rows for missing neurons
-    rt = tf.RaggedTensor.from_row_splits(sorted_synapse_indices, row_splits)
+    # The values of the RaggedTensor are the original synapse-array row indices,
+    # but sorted by presyn neuron
+    rt = tf.RaggedTensor.from_row_splits(sort_idx, row_splits, validate=False)
 
     return rt
 
@@ -721,7 +723,7 @@ class BillehColumn(tf.keras.layers.Layer):
         self.pre_ind_table = make_pre_ind_table(indices, n_source_neurons=self.recurrent_dense_shape[1])
         # Set the sign of the connections (exc or inh)
         # recurrent_weight_positive = tf.Variable(weights >= 0., name='recurrent_weights_sign', trainable=False)
-        recurrent_weight_positive = tf.constant(weights >= 0, dtype=tf.int8)
+        recurrent_weight_positive = tf.cast(weights >= 0, dtype=tf.int8)
         # Scale the weights
         self.recurrent_weight_values = tf.Variable(
             weights * recurrent_weight_scale / lr_scale,
@@ -753,7 +755,7 @@ class BillehColumn(tf.keras.layers.Layer):
             if not self._current_input:
                 self.pre_input_ind_table  = make_pre_ind_table(input_indices, n_source_neurons=self.lgn_input_dense_shape[1])
             # input_weight_positive = tf.Variable(input_weights >= 0., name=self.name+'_input_weights_sign', trainable=False)
-            input_weight_positive = tf.constant(input_weights >= 0, dtype=tf.int8)
+            input_weight_positive = tf.cast(input_weights >= 0, dtype=tf.int8)
             self.input_weight_values = tf.Variable(
                 input_weights * input_weight_scale / lr_scale, 
                 name=self.name+'_sparse_input_weights',
@@ -823,7 +825,7 @@ class BillehColumn(tf.keras.layers.Layer):
             interarea_indices = tf.Variable(interarea_indices, dtype=tf.int64, trainable=False)
             
             # interarea_weight_positive = tf.Variable(interarea_weights >= 0., name=self.name + '_interarea_weights_sign_'+self.source_column_order, trainable=False)
-            interarea_weight_positive = tf.constant(interarea_weights >= 0, dtype=tf.int8)
+            interarea_weight_positive = tf.cast(interarea_weights >= 0, dtype=tf.int8)
             
             interarea_weight_values = tf.Variable(
                 interarea_weights * interarea_weight_scale / lr_scale, 
@@ -874,8 +876,8 @@ class BillehColumn(tf.keras.layers.Layer):
         # x_t: Shape [batch_size, input_dim]
         # batch_size = tf.shape(x_t)[0]
         n_post_neurons = self.lgn_input_dense_shape[0]
-        if self.pre_input_ind_table is None:
-            return tf.zeros((self._batch_size, n_post_neurons), dtype=self.compute_dtype)
+        # if self.pre_input_ind_table is None:
+        #     return tf.zeros((self._batch_size, n_post_neurons), dtype=self.compute_dtype)
         # Find the indices of non-zero inputs
         non_zero_indices = tf.where(x_t > 0)
         batch_indices = non_zero_indices[:, 0]
@@ -1210,7 +1212,7 @@ class BillehColumn(tf.keras.layers.Layer):
 
         outputs = (
             new_z, 
-            new_v * self.voltage_scale + self.voltage_offset,
+            new_v #* self.voltage_scale + self.voltage_offset,
             # (input_current + new_asc_1 + new_asc_2) * self.voltage_scale
             )
         
@@ -1460,9 +1462,10 @@ def create_model(networks,
 
     # calculate the model outputs
     spikes = dict()
-    voltages = dict()
+    # voltages = dict()
     outputs = dict()
-    spikes['v1'], voltages['v1'], spikes['lm'], voltages['ml'] = hidden  ## these are results in all time steps? Yes, if return_sequences=True
+    # spikes['v1'], voltages['v1'], spikes['lm'], voltages['ml'] = hidden  ## these are results in all time steps? Yes, if return_sequences=True
+    spikes['v1'], _, spikes['lm'], _ = hidden  ## these are results in all time steps? Yes, if return_sequences=True
 
     rate_v1 = tf.reduce_mean(spikes['v1'])
     rate_lm = tf.reduce_mean(spikes['lm'])
