@@ -200,10 +200,11 @@ def main(_):
             raise ValueError
           
         # Build the optimizer
-        # optimizer.build(model.trainable_variables)
-        # #Enable loss scaling for training float16 model
-        # if flags.dtype == 'float16':
-        #     optimizer = mixed_precision.LossScaleOptimizer(optimizer) # to prevent suffering from underflow gradients when using tf.float16  
+        optimizer.build(model.trainable_variables) # the optimizer needs to be built before restoring from the checkpoint
+
+        #Enable loss scaling for training float16 model. This needs to be done before restoring from the checkpoint
+        if flags.dtype == 'float16':
+            optimizer = mixed_precision.LossScaleOptimizer(optimizer) # to prevent suffering from underflow gradients when using tf.float16
 
         # Option to resume the training from a checkpoint from a previous training session
         if flags.restore_from != '' and os.path.exists(flags.restore_from):
@@ -221,10 +222,12 @@ def main(_):
                 else:
                     print(f"Invalid optimizer: {flags.optimizer}")
                     raise ValueError
+                if flags.dtype == 'float16':
+                    optimizer = mixed_precision.LossScaleOptimizer(optimizer) # to prevent suffering from underflow gradients when using tf.float16
+
                 # Restore the model
                 checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
                 checkpoint.restore(checkpoint_directory).expect_partial()#.assert_consumed()
-                # optimizer.build(model.trainable_variables)
             else:
                 try:
                     # Restore the model
@@ -242,10 +245,12 @@ def main(_):
                     else:
                         print(f"Invalid optimizer: {flags.optimizer}")
                         raise ValueError
+                    if flags.dtype == 'float16':
+                        optimizer = mixed_precision.LossScaleOptimizer(optimizer) # to prevent suffering from underflow gradients when using tf.float16
+
                     # Restore the model
                     checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
                     checkpoint.restore(checkpoint_directory).expect_partial()#.assert_consumed()
-                    # optimizer.build(model.trainable_variables)
 
         # Restore model and optimizer from an intermediate checkpoint if it exists
         elif flags.ckpt_dir != '' and os.path.exists(os.path.join(flags.ckpt_dir, "Intermediate_checkpoints")):
@@ -260,10 +265,12 @@ def main(_):
                 else:
                     print(f"Invalid optimizer: {flags.optimizer}")
                     raise ValueError
+                if flags.dtype == 'float16':
+                    optimizer = mixed_precision.LossScaleOptimizer(optimizer) # to prevent suffering from underflow gradients when using tf.float16
+
                 # Restore the model
                 checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
                 checkpoint.restore(checkpoint_directory).expect_partial()#.assert_consumed()
-                # optimizer.build(model.trainable_variables)
             else:
                 # Restore the model
                 checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
@@ -271,10 +278,6 @@ def main(_):
         else:
             print(f"No checkpoint found in {flags.ckpt_dir} or {flags.restore_from}. Starting from scratch...\n")
             checkpoint = None
-
-        #Enable loss scaling for training float16 model
-        if flags.dtype == 'float16':
-            optimizer = mixed_precision.LossScaleOptimizer(optimizer) # to prevent suffering from underflow gradients when using tf.float16  
 
         model_variables_dict['Best'] =  {var.name: var.numpy().astype(np.float16) for var in model.trainable_variables}
         print(f"Model variables stored in dictionary\n")
