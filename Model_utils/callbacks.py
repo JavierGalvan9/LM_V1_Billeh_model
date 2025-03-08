@@ -552,14 +552,16 @@ class OsiDsiCallbacks:
         fanos = np.array(fanos)
         return fanos, bin_sizes
         
-    def fanos_figure(self, spikes, area='', n_samples=100, fano_duration=300, analyze_core_only=True, data_dir='Synchronization_data'):
+    def fanos_figure(self, spikes, area='', n_samples=100, spont_fano_duration=300, evoked_fano_duration=300, analyze_core_only=True, data_dir='Synchronization_data'):
         # Calculate fano factors for both sessions
-        fano_duration_seconds = fano_duration / 1000
-        t_start_seconds = self.pre_delay / 1000 + 0.2
-        t_end_seconds = t_start_seconds + fano_duration_seconds
+        evoked_t_start_seconds = self.pre_delay / 1000 + 0.2
+        evoked_t_end_seconds = evoked_t_start_seconds + evoked_fano_duration / 1000
         # evoked_fanos, evoked_bin_sizes = self.fano_factor(spikes, area=area, t_start=0.7, t_end=2.5, n_samples=n_samples, analyze_core_only=analyze_core_only)
-        evoked_fanos, evoked_bin_sizes = self.fano_factor(spikes, area=area, t_start=t_start_seconds, t_end=t_end_seconds, n_samples=n_samples, analyze_core_only=analyze_core_only)
-        spontaneous_fanos, spont_bin_sizes = self.fano_factor(spikes, area=area, t_start=0.2, t_end=self.pre_delay/1000, n_samples=n_samples, analyze_core_only=analyze_core_only)
+        evoked_fanos, evoked_bin_sizes = self.fano_factor(spikes, area=area, t_start=evoked_t_start_seconds, t_end=evoked_t_end_seconds, n_samples=n_samples, analyze_core_only=analyze_core_only)
+
+        spont_t_start_seconds = 0.2
+        spont_t_end_seconds = spont_t_start_seconds + spont_fano_duration / 1000
+        spontaneous_fanos, spont_bin_sizes = self.fano_factor(spikes, area=area, t_start=spont_t_start_seconds, t_end=spont_t_end_seconds, n_samples=n_samples, analyze_core_only=analyze_core_only)
 
         # Calculate mean, standard deviation, and SEM of the Fano factors
         evoked_fanos_mean = np.nanmean(evoked_fanos, axis=0)
@@ -574,9 +576,9 @@ class OsiDsiCallbacks:
         spontaneous_max_fano = np.nanmax(spontaneous_fanos_mean)
         spontaneous_max_fano_freq = 1/(2*spont_bin_sizes[np.nanargmax(spontaneous_fanos_mean)])
         # Load experimental data
-        evoked_exp_data_path = os.path.join(data_dir, f'Fano_factor_{area}', f'{area}_fano_running_{fano_duration}ms_evoked.npy')
+        evoked_exp_data_path = os.path.join(data_dir, f'Fano_factor_{area}', f'{area}_fano_running_{evoked_fano_duration}ms_evoked.npy')
         evoked_exp_fanos = np.load(evoked_exp_data_path, allow_pickle=True)
-        spont_exp_data_path = os.path.join(data_dir, f'Fano_factor_{area}', f'{area}_fano_running_{fano_duration}ms_spont.npy')
+        spont_exp_data_path = os.path.join(data_dir, f'Fano_factor_{area}', f'{area}_fano_running_{spont_fano_duration}ms_spont.npy')
         spont_exp_fanos = np.load(spont_exp_data_path, allow_pickle=True)
         # Mask experimental data to match bin sizes
         # Assuming experimental data was computed with the same initial bin_sizes array
@@ -615,7 +617,7 @@ class OsiDsiCallbacks:
 
         plt.tight_layout()
         os.makedirs(os.path.join(self.images_dir, 'Fano_Factor'), exist_ok=True)
-        plt.savefig(os.path.join(self.images_dir, 'Fano_Factor', f'{area}_epoch_{self.current_epoch}.png'), dpi=300, transparent=False)
+        plt.savefig(os.path.join(self.images_dir, 'Fano_Factor', f'{area}_epoch_{self.current_epoch}_spont_{spont_fano_duration}ms_evoked_{evoked_fano_duration}ms.png'), dpi=300, transparent=False)
         plt.close()
     
     # def fano_factor_tf(self, spikes, area='', t_start=0.7, t_end=2.5, n_samples=100, 
@@ -912,7 +914,8 @@ class OsiDsiCallbacks:
             # Fano factor analysis
             print('Fano factor analysis for area: ', area)
             t_fano0 = time()
-            self.fanos_figure(spikes, area=area, n_samples=1000, fano_duration=fano_duration, analyze_core_only=True)
+            self.fanos_figure(spikes, area=area, n_samples=1000, spont_fano_duration=300, evoked_fano_duration=300, analyze_core_only=True)
+            self.fanos_figure(spikes, area=area, n_samples=1000, spont_fano_duration=300, evoked_fano_duration=1800, analyze_core_only=True)
             print('Fanos figure saved in ', time() - t_fano0, ' seconds!\n')
 
             # print('Fano factor TF analysis for area: ', area)

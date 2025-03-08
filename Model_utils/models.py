@@ -913,7 +913,7 @@ class BillehColumn(tf.keras.layers.Layer):
         )
         i_in = tf.sparse.sparse_dense_matmul(
                                             sparse_w_bkg, 
-                                            tf.cast(rest_of_brain, dtype=self.variable_dtype), 
+                                            rest_of_brain, 
                                             adjoint_b=True
                                             )
         # Optionally cast the output back to float16
@@ -1141,7 +1141,7 @@ class BillehColumn(tf.keras.layers.Layer):
                                     dtype=self.variable_dtype) # this implementation is slower
             i_noise = self.calculate_noise_current(bkg_input)
         else:
-            i_noise = tf.zeros((self._batch_size, self._n_neurons * self._n_receptors), dtype=self.compute_dtype)
+            i_noise = tf.zeros((self._batch_size * self._n_neurons * self._n_receptors), dtype=self.compute_dtype)
 
         # Add all the current sources
         if self.input_indices is not None: # only V1 area can receive external input

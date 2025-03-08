@@ -237,19 +237,6 @@ def main():
            eval_job_id = submit_job(new_evaluation_command)
            eval_job_ids.append(eval_job_id)
 
-    # # Final evaluation with the best model
-    # final_evaluation_command = evaluation_commands + ["-o", f"Out/{sim_name}_{v1_neurons}_test_final.out", "-e", f"Error/{sim_name}_{v1_neurons}_test_final.err", "-j", f"{sim_name}_test_final"]
-    # final_evaluation_script = evaluation_script + f"--seed {flags.seed} --ckpt_dir {logdir} --restore_from {initial_benchmark_model} --run_session {0}"
-    # final_evaluation_command = final_evaluation_command + [final_evaluation_script]
-    # eval_job_id = submit_job(final_evaluation_command)
-    # eval_job_ids.append(eval_job_id)
-
-    # final_evaluation_command = evaluation_commands + ["-o", f"Out/{sim_name}_{v1_neurons}_test_final_0.out", "-e", f"Error/{sim_name}_{v1_neurons}_test_final_0.err", "-j", f"{sim_name}_test_final0"]
-    # final_evaluation_script = evaluation_script + f"--seed {flags.seed} --ckpt_dir {logdir} --restore_from {initial_benchmark_model} --run_session {0} --noconnected_areas"
-    # final_evaluation_command = final_evaluation_command + [final_evaluation_script]
-    # eval_job_id = submit_job(final_evaluation_command)
-    # eval_job_ids.append(eval_job_id)
-
     # Final evaluation with the best model
     final_evaluation_command = evaluation_commands + ['-d', job_id, "-o", f"Out/{sim_name}_{v1_neurons}_test_final.out", "-e", f"Error/{sim_name}_{v1_neurons}_test_final.err", "-j", f"{sim_name}_test_final"]
     final_evaluation_script = evaluation_script + f"--seq_len 200 --seed {flags.seed + i} --ckpt_dir {logdir} --restore_from 'Best_model' --run_session {i}"
@@ -262,24 +249,6 @@ def main():
     final_evaluation_command = final_evaluation_command + [final_evaluation_script]
     eval_job_id = submit_job(final_evaluation_command)
     eval_job_ids.append(eval_job_id)
-
-    # final_evaluation_command = evaluation_commands + ['-d', job_id, "-o", f"Out/{sim_name}_{v1_neurons}_test_final_1.out", "-e", f"Error/{sim_name}_{v1_neurons}_test_final_1.err", "-j", f"{sim_name}_test_final1"]
-    # final_evaluation_script = evaluation_script + f"--seed {flags.seed + i} --ckpt_dir {logdir} --restore_from 'Best_model' --run_session {i} --nocalculate_osi_dsi --noconnected_noise"
-    # final_evaluation_command = final_evaluation_command + [final_evaluation_script]
-    # eval_job_id = submit_job(final_evaluation_command)
-    # eval_job_ids.append(eval_job_id)
-
-    # final_evaluation_command = evaluation_commands + ['-d', job_id, "-o", f"Out/{sim_name}_{v1_neurons}_test_final_2.out", "-e", f"Error/{sim_name}_{v1_neurons}_test_final_2.err", "-j", f"{sim_name}_test_final2"]
-    # final_evaluation_script = evaluation_script + f"--seed {flags.seed + i} --ckpt_dir {logdir} --restore_from 'Best_model' --run_session {i} --nocalculate_osi_dsi --noconnected_recurrent_connections"
-    # final_evaluation_command = final_evaluation_command + [final_evaluation_script]
-    # eval_job_id = submit_job(final_evaluation_command)
-    # eval_job_ids.append(eval_job_id)
-
-    # final_evaluation_command = evaluation_commands + ['-d', job_id, "-o", f"Out/{sim_name}_{v1_neurons}_test_final_3.out", "-e", f"Error/{sim_name}_{v1_neurons}_test_final_3.err", "-j", f"{sim_name}_test_final3"]
-    # final_evaluation_script = evaluation_script + f"--seed {flags.seed + i} --ckpt_dir {logdir} --restore_from 'Best_model' --run_session {i} --nocalculate_osi_dsi --noconnected_areas --noconnected_recurrent_connections"
-    # final_evaluation_command = final_evaluation_command + [final_evaluation_script]
-    # eval_job_id = submit_job(final_evaluation_command)
-    # eval_job_ids.append(eval_job_id)
     
     print("Submitted training jobs with the following JOBIDs:", job_ids)
     print("Submitted evaluation jobs with the following JOBIDs:", eval_job_ids)

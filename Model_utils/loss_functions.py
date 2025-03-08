@@ -466,29 +466,6 @@ class SynchronizationLoss(Layer):
         experimental_fanos_mean = np.nanmean(experimental_fanos[:, bin_sizes_mask], axis=0)
         self.experimental_fanos_mean = tf.constant(experimental_fanos_mean, dtype=self._dtype)
 
-    # def pop_fano_tf(self, spikes, bin_sizes):
-    #     # transpose the spikes tensor to have the shape (seq_len, samples)
-    #     all_spikes_transposed = tf.transpose(spikes)
-    #     # Initialize the Fano factors tensor
-    #     fanos = tf.TensorArray(dtype=self._dtype, size=len(bin_sizes))
-    #     for i, bin_width in enumerate(bin_sizes):
-    #         # drop the last entry to avoid last bin smaller size effect
-    #         bin_size = int(np.round(bin_width * 1000))
-    #         max_index = all_spikes_transposed.shape[0] // bin_size * bin_size
-    #         trimmed_spikes = all_spikes_transposed[:max_index, :]
-    #         # Reshape the spikes tensor 
-    #         trimmed_spikes = tf.reshape(trimmed_spikes, [max_index // bin_size, bin_size, -1])
-    #         # Calculate the number of spikes in each bin
-    #         sp_counts = tf.reduce_sum(trimmed_spikes, axis=1)
-    #         # Calculate the mean and variance of spike counts
-    #         mean_count = tf.reduce_mean(sp_counts, axis=0)
-    #         mean_count = tf.maximum(mean_count, self.epsilon)
-    #         var_count = tf.math.reduce_variance(sp_counts, axis=0)
-    #         fano = var_count / mean_count
-    #         fanos = fanos.write(i, fano)
-
-    #     return fanos.stack()
-
     def pop_fano_tf(self, spikes, bin_sizes):
         spikes = tf.expand_dims(spikes, axis=-1)
         fanos = tf.TensorArray(dtype=self._dtype, size=len(bin_sizes))
