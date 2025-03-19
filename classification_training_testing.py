@@ -161,12 +161,17 @@ def main():
         logdir = os.path.dirname(flags.restore_from) 
         initial_benchmark_model = flags.restore_from
         if 'mnist' in logdir:
-            counter = 1
-            while os.path.exists(logdir + f'_{counter}'):
-                counter += 1
-            logdir = logdir + f'_{counter}'
+            pass
         else:
-            logdir += '_mnist' #'_mnist_only_TD'
+            logdir += '_mnist'
+            sim_name += '_mnist'
+            # counter = 1
+            # while os.path.exists(logdir + f'_{counter}'):
+            #     counter += 1
+            # logdir = logdir + f'_{counter}'
+        #     logdir += '_mnist' #'_mnist_only_TD'
+        # logdir += f'_3'
+        # sim_name += '_3'
 
     # logdir = '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Simulation_results/v1_100000_lm_30000/b_jshp_mnist/Best_model'
     # sim_name = 'b_jshp_mnist'

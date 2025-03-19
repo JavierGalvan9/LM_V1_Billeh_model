@@ -206,10 +206,36 @@ def main(_):
         if flags.dtype == 'float16':
             optimizer = mixed_precision.LossScaleOptimizer(optimizer) # to prevent suffering from underflow gradients when using tf.float16
 
-        # Option to resume the training from a checkpoint from a previous training session
-        if flags.restore_from != '' and os.path.exists(flags.restore_from):
-            checkpoint_directory = tf.train.latest_checkpoint(flags.restore_from)
+        # Restore model and optimizer from an intermediate checkpoint if it exists
+        if flags.ckpt_dir != '' and os.path.exists(os.path.join(flags.ckpt_dir, "Intermediate_checkpoints")):
+            checkpoint_directory = tf.train.latest_checkpoint(os.path.join(flags.ckpt_dir, "Intermediate_checkpoints"))
             print(f'Restoring checkpoint from {checkpoint_directory}...')
+            optimizer_continuing = other_billeh_utils.optimizers_match(optimizer, checkpoint_directory)            
+            if not optimizer_continuing:
+                if flags.optimizer == 'adam':
+                    optimizer = tf.keras.optimizers.Adam(flags.learning_rate, epsilon=1e-11)
+                elif flags.optimizer == 'exp_adam':
+                    optimizer = ExponentiatedAdam(flags.learning_rate, epsilon=1e-11)
+                elif flags.optimizer == 'sgd':
+                    optimizer = tf.keras.optimizers.SGD(flags.learning_rate, momentum=0.0, nesterov=False)
+                else:
+                    print(f"Invalid optimizer: {flags.optimizer}")
+                    raise ValueError
+                if flags.dtype == 'float16':
+                    optimizer = mixed_precision.LossScaleOptimizer(optimizer) # to prevent suffering from underflow gradients when using tf.float16
+
+                # Restore the model
+                checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
+                checkpoint.restore(checkpoint_directory).expect_partial()#.assert_consumed()
+            else:
+                # Restore the model
+                checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
+                checkpoint.restore(checkpoint_directory).assert_consumed()
+
+        # Option to resume the training from a checkpoint from a previous training session
+        elif flags.restore_from != '' and os.path.exists(flags.restore_from):
+            checkpoint_directory = tf.train.latest_checkpoint(flags.restore_from)
+            print(f'Restoring checkpoint from {checkpoint_directory} with the restore_from option...')
             optimizer_continuing = other_billeh_utils.optimizers_match(optimizer, checkpoint_directory)            
             if not optimizer_continuing:
                 # Define the optimizer
@@ -251,30 +277,6 @@ def main(_):
                     # Restore the model
                     checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
                     checkpoint.restore(checkpoint_directory).expect_partial()#.assert_consumed()
-
-        # Restore model and optimizer from an intermediate checkpoint if it exists
-        elif flags.ckpt_dir != '' and os.path.exists(os.path.join(flags.ckpt_dir, "Intermediate_checkpoints")):
-            checkpoint_directory = tf.train.latest_checkpoint(os.path.join(flags.ckpt_dir, "Intermediate_checkpoints"))
-            print(f'Restoring checkpoint from {checkpoint_directory}...')
-            optimizer_continuing = other_billeh_utils.optimizers_match(optimizer, checkpoint_directory)            
-            if not optimizer_continuing:
-                if flags.optimizer == 'adam':
-                    optimizer = tf.keras.optimizers.Adam(flags.learning_rate, epsilon=1e-11)  
-                elif flags.optimizer == 'sgd':
-                    optimizer = tf.keras.optimizers.SGD(flags.learning_rate, momentum=0.0, nesterov=False)
-                else:
-                    print(f"Invalid optimizer: {flags.optimizer}")
-                    raise ValueError
-                if flags.dtype == 'float16':
-                    optimizer = mixed_precision.LossScaleOptimizer(optimizer) # to prevent suffering from underflow gradients when using tf.float16
-
-                # Restore the model
-                checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
-                checkpoint.restore(checkpoint_directory).expect_partial()#.assert_consumed()
-            else:
-                # Restore the model
-                checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
-                checkpoint.restore(checkpoint_directory).assert_consumed()
         else:
             print(f"No checkpoint found in {flags.ckpt_dir} or {flags.restore_from}. Starting from scratch...\n")
             checkpoint = None
