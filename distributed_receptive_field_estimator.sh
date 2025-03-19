@@ -34,4 +34,4 @@
 # --noconnected_areas
 
 
-python distributed_receptive_field_estimator.py --no-connected_areas --restore_from '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Simulation_results/v1_100000_lm_30000/b_gvbz/Best_model' --v1_neurons 100000 --lm_neurons 30000 --seq_len 350 --delays '100,0' --n_trials 50 --row_size 120 --col_size 240 --radius_circle 5 --dtype float16 --batch_size 5
+python distributed_receptive_field_estimator.py --connected_areas --restore_from '/home/jgalvan/Desktop/Neurocoding/LM_V1_Billeh_model/Simulation_results/v1_100000_lm_30000/b_07x0/Best_model' --v1_neurons 100000 --lm_neurons 30000 --seq_len 350 --delays '100,0' --n_trials 50 --row_size 120 --col_size 240 --radius_circle 10 --dtype float16 --batch_size 5

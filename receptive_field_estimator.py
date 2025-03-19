@@ -207,11 +207,11 @@ def main(_):
             checkpoint_directory = None
             print(f"No checkpoint found in {flags.ckpt_dir} or {flags.restore_from}. Starting from scratch...\n")
 
-        setup_dir = f'connected_areas_{flags.connected_areas}_conn_rec_{flags.connected_recurrent_connections}_conn_noise_{flags.connected_noise}'
+        setup_dir = f'connected_areas_{flags.connected_areas}_conn_rec_{flags.connected_recurrent_connections}_conn_noise_{flags.connected_noise} '
         if checkpoint_directory is not None:
-            results_dir = os.path.join(checkpoint_directory+'_results', setup_dir, flags.results_dir)
+            results_dir = os.path.join(checkpoint_directory+'_results', setup_dir, f'Receptive_field_Gabor_radius_{flags.radius_circle} ')
         else:
-            results_dir = os.path.join(logdir, setup_dir, flags.results_dir+'_from_scratch')
+            results_dir = os.path.join(logdir, setup_dir, f'Receptive_field_Gabor_radius_{flags.radius_circle}_from_scratch')
         os.makedirs(results_dir, exist_ok=True)
         print(f'Receptive field analysis will be saved in: {results_dir}\n')
 
