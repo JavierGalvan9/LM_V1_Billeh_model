@@ -101,3 +101,8 @@ size_tuning_analysis/Data/Simulation stats
 size_tuning_analysis/Data/simulation_data
 size_tuning_analysis/Raster_plots/Rasterplot_0.png
 receptive_field_0924/rf_analysis_new.ipynb
+test.py
+tests_new_csr_loopup.ipynb
+.vscode
+.github
+.vscode/settings.json
