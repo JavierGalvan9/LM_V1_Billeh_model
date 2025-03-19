@@ -512,13 +512,6 @@ def main(_):
         # new_state = tuple(_out[1:])
         # tf.nest.map_structure(lambda a, b: a.assign(b), state_variables, new_state)
 
-        # update the exponential moving average of the firing rates
-        v1_rates = tf.reduce_mean(_v1_z[:, delays[0]:seq_len-delays[1], :], (0, 1))
-        lm_rates = tf.reduce_mean(_lm_z[:, delays[0]:seq_len-delays[1], :], (0, 1))
-        # Update the EMAs
-        v1_ema.assign(ema_decay * v1_ema + (1 - ema_decay) * v1_rates)
-        lm_ema.assign(ema_decay * lm_ema + (1 - ema_decay) * lm_rates)
-
         v1_voltage_loss = v1_voltage_regularizer(_v1_v) # trim is irrelevant for this
         lm_voltage_loss = lm_voltage_regularizer(_lm_v) # trim is irrelevant for this
         voltage_loss = (v1_voltage_loss + lm_voltage_loss) / 2
@@ -538,6 +531,12 @@ def main(_):
             lm_sync_loss = lm_spont_sync_loss(_lm_z, trim)
             sync_loss = (v1_sync_loss + lm_sync_loss) / 2
         else:
+            # update the exponential moving average of the firing rates over drifting gratings presentations
+            v1_rates = tf.reduce_mean(_v1_z[:, delays[0]:seq_len-delays[1], :], (0, 1))
+            lm_rates = tf.reduce_mean(_lm_z[:, delays[0]:seq_len-delays[1], :], (0, 1))
+            # Update the EMAs
+            v1_ema.assign(ema_decay * v1_ema + (1 - ema_decay) * v1_rates)
+            lm_ema.assign(ema_decay * lm_ema + (1 - ema_decay) * lm_rates)
             # Compute the final term only after the first three terms have been computed
             v1_rate_loss = v1_evoked_rate_regularizer(_v1_z, trim)
             lm_rate_loss = lm_evoked_rate_regularizer(_lm_z, trim)
@@ -603,8 +602,8 @@ def main(_):
         train_voltage_loss.update_state(_aux['voltage_loss'])
         train_regularizer_loss.update_state(_aux['regularizer_loss'])
         train_sync_loss.update_state(_aux['sync_loss'])
-        if not spontaneous:
-            train_osi_dsi_loss.update_state(_aux['osi_dsi_loss'])
+        # if not spontaneous:
+        train_osi_dsi_loss.update_state(_aux['osi_dsi_loss'])
 
         return _loss, _aux, _out#, grad
             

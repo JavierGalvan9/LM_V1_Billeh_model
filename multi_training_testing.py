@@ -162,8 +162,8 @@ def main():
     # training_commands = ["run", "-g", "1", "-m", "24", "-t", "1:15"]
     # evaluation_commands = ["run", "-g", "1", "-m", "65", "-t", "0:45"]
 
-    training_commands = ["run", "-g", f"{flags.n_gpus}", "-c", f"{4 * flags.n_gpus}", "-m", "60", "-t", "24:00"] 
-    # training_commands = ["run", "-g", f"{flags.n_gpus}", "-G", "L40S", "-c", f"{4 * flags.n_gpus}", "-m", "48", "-t", "10:00"] # L40S choose the particular gpu model for training with 48 GB of memory
+    # training_commands = ["run", "-g", f"{flags.n_gpus}", "-c", f"{4 * flags.n_gpus}", "-m", "60", "-t", "24:00"] 
+    training_commands = ["run", "-g", f"{flags.n_gpus}", "-G", "L40S", "-c", f"{4 * flags.n_gpus}", "-m", "48", "-t", "10:00"] # L40S choose the particular gpu model for training with 48 GB of memory
     evaluation_commands = ["run", "-g", "1", "-m", "80", "-c", "4", "-t", "2:00"]
 
     # Define the training and evaluation script calls
