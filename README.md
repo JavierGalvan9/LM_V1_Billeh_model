@@ -151,7 +151,7 @@ Here's an example workflow for using this model:
 
 3. Visualize and analyze the results using the Jupyter notebooks.
 
-## Citation
+<!-- ## Citation
 
 If you use this model in your research, please cite:
 
@@ -162,7 +162,7 @@ If you use this model in your research, please cite:
   journal={Journal Name},
   year={2023}
 }
-```
+``` -->
 
 ## References
 
@@ -171,8 +171,8 @@ If you use this model in your research, please cite:
 
 ## License
 
-[Add your license information here]
+<!-- [Add your license information here]
 
 ## Contact
 
-[Add your contact information here]
+[Add your contact information here] -->
